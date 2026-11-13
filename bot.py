@@ -1,4 +1,4 @@
-import os, asyncio, sqlite3, time, re, logging
+import os, asyncio, sqlite3, time, re, logging, json
 from contextlib import closing
 from urllib.parse import urlparse
 from decimal import Decimal
@@ -7,6 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from mirror import ProviderMirror
+from pool import MirrorPool
 
 logging.basicConfig(level=logging.WARNING)
 TOKEN=os.getenv("BOT_TOKEN","")
@@ -138,7 +139,7 @@ async def start(u,c):
     user(uid,ref)
     if MIRROR is not None:
         if not await MIRROR.open(uid):
-            await u.effective_message.reply_text("⏳ The upstream Telegram account is currently handling another customer. Please try /start again shortly.")
+            await u.effective_message.reply_text(f"⏳ All mirrors are busy. You are in the waiting queue at position #{MIRROR.position(uid)}. We will notify you automatically when your turn arrives.")
             return
         if is_admin(uid):
             await u.effective_message.reply_text("🛠 ADMIN CONTROLS",reply_markup=admin_menu())
@@ -282,9 +283,6 @@ async def intake(u,c):
         return
     uid=u.effective_user.id
     user(uid)
-    if MIRROR is not None and not MIRROR.may_start(uid):
-        await u.message.reply_text("⏳ The upstream account is busy with another customer. Retry once their session finishes.")
-        return
     with closing(db()) as con:
         con.execute("BEGIN IMMEDIATE")
         current=con.execute("SELECT balance FROM users WHERE uid=?",(uid,)).fetchone()["balance"]
@@ -308,10 +306,13 @@ async def intake(u,c):
             finish(oid,"review","Upstream account busy or unavailable, request not submitted")
             await u.message.reply_text("⚠️ The original bot was not available. The request was not submitted, and your wallet was not charged.")
             return
-        with closing(db()) as con:
-            con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
-            con.commit()
-        await u.message.reply_text(f"📨 Request #{oid} sent to the ORIGINAL bot. Its actual messages and buttons will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. All original responses will be mirrored. Free admin test.")
+        if accepted=="processing":
+            with closing(db()) as con:
+                con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
+                con.commit()
+            await u.message.reply_text(f"📨 Request #{oid} sent to the ORIGINAL bot. Its actual messages and buttons will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. All original responses will be mirrored. Free admin test.")
+        else:
+            await u.message.reply_text(f"⏳ Request #{oid} queued. Your position: #{MIRROR.position(uid)}. It will start automatically when a mirror becomes free. No charge while waiting.")
         return
     await Q.put((oid,uid,url))
     await u.message.reply_text(f"💎 VERIFICATION REQUEST QUEUED\n━━━━━━━━━━━━━━━━━━\n🆔 Order #{oid}\n⏳ Waiting for processing.\n"+("♾ Admin test: FREE — no wallet deduction." if is_admin(uid) else f"💰 {PRICE_LABEL} charged only on SUCCESS."))
@@ -467,6 +468,10 @@ async def verify_command(u,c):
     user(u.effective_user.id)
     await u.effective_message.reply_text(verify_text(u.effective_user.id))
 
+async def sessions_command(u,c):
+    if not is_admin(u.effective_user.id): return
+    await u.effective_message.reply_text(MIRROR.status() if MIRROR else "No mirrors connected.")
+
 async def release_command(u,c):
     if MIRROR is None:
         await u.effective_message.reply_text("Provider mirror is offline.")
@@ -499,6 +504,7 @@ async def init(app):
             ("history","Your recent verifications"),
             ("whoami","Your Telegram numeric ID"),
             ("done","Release upstream chat for the next customer"),
+            ("sessions","Admin: mirror pool and queue status"),
             ("cancel","Admin: cancel a queued order"),
             ("addadmin","Admin: grant admin access"),
             ("admins","Admin: list administrators"),
@@ -506,27 +512,46 @@ async def init(app):
     except Exception:
         logging.exception("Unable to update Telegram bot profile")
 
-    session=os.getenv("TG_SESSION_STRING","")
     api=os.getenv("TG_API_ID","")
     hash=os.getenv("TG_API_HASH","")
-    if session and api.isdigit() and hash:
-        try:
-            CLIENT=TelegramClient(StringSession(session),int(api),hash)
-            await CLIENT.connect()
-            if not await CLIENT.is_user_authorized():
-                await CLIENT.disconnect(); CLIENT=None
-                logging.error("Telegram session not authorized")
-            else:
-                mirror=ProviderMirror(
-                    CLIENT,PROVIDER,app,finish,classify,is_admin,PRICE_LABEL,
+    raw=os.getenv("TG_SESSION_STRINGS","")
+    try:
+        sessions=json.loads(raw) if raw.strip().startswith("[") else [x.strip() for x in raw.splitlines() if x.strip()]
+    except ValueError:
+        logging.error("TG_SESSION_STRINGS must be a JSON array or newline-separated session strings")
+        sessions=[]
+    original=os.getenv("TG_SESSION_STRING","").strip()
+    if original and original not in sessions: sessions.insert(0,original)
+    clients=[]
+    mirrors=[]
+    if sessions and api.isdigit() and hash:
+        for i,session in enumerate(sessions):
+            try:
+                client=TelegramClient(StringSession(session),int(api),hash)
+                await client.connect()
+                if not await client.is_user_authorized():
+                    await client.disconnect()
+                    logging.error("Mirror session %s is not authorized",i+1)
+                    continue
+                mirror=ProviderMirror(client,PROVIDER,app,finish,classify,is_admin,PRICE_LABEL,
                     session_ttl=int(os.getenv("MIRROR_SESSION_TTL","300")),
-                    result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360"))
-                )
+                    result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360")))
                 await mirror.start()
-                MIRROR=mirror
-        except Exception:
-            logging.exception("Unable to connect Telegram account")
-            CLIENT=None
+                clients.append(client)
+                mirrors.append(mirror)
+            except Exception:
+                logging.exception("Unable to connect mirror session %s",i+1)
+    if mirrors:
+        def order_open(oid):
+            with closing(db()) as con:
+                row=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
+                return bool(row and row["status"]=="queued")
+        MIRROR=MirrorPool(mirrors,app.bot,finished=order_open)
+        for mirror in mirrors:
+            mirror.on_terminal=MIRROR.on_finished
+        app.bot_data["mirror_clients"]=clients
+        app.bot_data["pool_worker"]=asyncio.create_task(MIRROR.run())
+        logging.warning("Multi-mirror pool started with %s authorized Telegram accounts",len(mirrors))
     with closing(db()) as con:
         con.execute("UPDATE orders SET status='review',result='Restart; check original provider status' WHERE status IN ('queued','processing')")
         con.commit()
@@ -540,14 +565,21 @@ async def shutdown(app):
         task.cancel()
         try: await task
         except asyncio.CancelledError: pass
-    if MIRROR: await MIRROR.stop()
+    task=app.bot_data.get("pool_worker")
+    if task:
+        task.cancel()
+        try: await task
+        except asyncio.CancelledError: pass
+    if MIRROR:
+        for mirror in MIRROR.mirrors: await mirror.stop()
+    for client in app.bot_data.get("mirror_clients",[]): await client.disconnect()
     if CLIENT: await CLIENT.disconnect()
 
 def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("whoami",whoami)]:
+    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
