@@ -71,3 +71,18 @@ This app requires a persistent Railway volume mounted at \`/data\`. Deploy from 
 - `/start`: shows the administrator control buttons **Cancel Order**, **Add Admin**, and **Orders** for administrators only.
 
 The original administrators in Railway `ADMIN_IDS` remain recognized. Additional administrators are stored in the persistent database at `/data`.
+
+
+## Multiple Telegram accounts and FIFO queue
+
+Add each **different, authorized Telegram user account** session string to the Railway **secret** variable \`TG_SESSION_STRINGS\`. Format it as a JSON array:
+
+\`\`\`json
+["SESSION_STRING_FOR_ACCOUNT_2", "SESSION_STRING_FOR_ACCOUNT_3"]
+\`\`\`
+
+Keep the existing \`TG_SESSION_STRING\` for the original account. It is included automatically; additional accounts are loaded from \`TG_SESSION_STRINGS\`. All accounts use the same \`TG_API_ID\` and \`TG_API_HASH\` (your Telegram application credentials), and each must be able to chat with \`@gemini_ver_bot\`. Duplicate Telegram accounts are ignored.
+
+Each account operates one independent upstream conversation at a time. The pool assigns an available account to each customer. When all accounts are busy, customers join a first-in-first-out queue; the bot notifies them when a session becomes available. An order is charged only on confirmed success. On completion or timeout the session is released and the next customer starts. A customer can release an idle session with \`/done\`. Administrators can inspect counts using \`/sessions\`.
+
+**Important:** Add session strings only in Railway Variables, never in Telegram chat or GitHub. Session strings grant account access. Restarting the service marks in-progress orders for review; a production-grade durable queue would require recovery across restarts.
