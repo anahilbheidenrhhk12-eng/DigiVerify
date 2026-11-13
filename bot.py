@@ -524,6 +524,7 @@ async def init(app):
     if original and original not in sessions: sessions.insert(0,original)
     clients=[]
     mirrors=[]
+    seen_accounts=set()
     if sessions and api.isdigit() and hash:
         for i,session in enumerate(sessions):
             try:
@@ -533,6 +534,12 @@ async def init(app):
                     await client.disconnect()
                     logging.error("Mirror session %s is not authorized",i+1)
                     continue
+                account=await client.get_me()
+                if account.id in seen_accounts:
+                    logging.warning("Duplicate Telegram account in mirror session %s ignored",i+1)
+                    await client.disconnect()
+                    continue
+                seen_accounts.add(account.id)
                 mirror=ProviderMirror(client,PROVIDER,app,finish,classify,is_admin,PRICE_LABEL,
                     session_ttl=int(os.getenv("MIRROR_SESSION_TTL","300")),
                     result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360")))
@@ -546,7 +553,11 @@ async def init(app):
             with closing(db()) as con:
                 row=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
                 return bool(row and row["status"]=="queued")
-        MIRROR=MirrorPool(mirrors,app.bot,finished=order_open)
+        def order_started(oid):
+            with closing(db()) as con:
+                con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
+                con.commit()
+        MIRROR=MirrorPool(mirrors,app.bot,finished=order_open,started=order_started)
         for mirror in mirrors:
             mirror.on_terminal=MIRROR.on_finished
         app.bot_data["mirror_clients"]=clients
