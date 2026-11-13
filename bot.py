@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 TOKEN=os.getenv("BOT_TOKEN","")
 ADMINS={int(x) for x in os.getenv("ADMIN_IDS","").split(",") if x.strip().isdigit()}
 PATH=os.getenv("DATABASE_PATH","/data/digiverify.sqlite3")
@@ -300,11 +300,45 @@ async def orders(u,c):
         rows=con.execute("SELECT id,uid,status FROM orders ORDER BY id DESC LIMIT 15").fetchall()
     await u.message.reply_text("📋 ORDERS\n"+("\n".join("#"+str(r["id"])+" "+str(r["uid"])+" "+r["status"] for r in rows) or "None"))
 
+async def services_command(u,c):
+    user(u.effective_user.id)
+    await u.effective_message.reply_text(catalog_text(u.effective_user.id))
+
+async def guide_command(u,c):
+    await u.effective_message.reply_text(guide_text())
+
+async def verify_command(u,c):
+    user(u.effective_user.id)
+    await u.effective_message.reply_text(verify_text(u.effective_user.id))
+
 async def whoami(u,c):
     await u.message.reply_text("Your Telegram ID: "+str(u.effective_user.id))
 
 async def init(app):
     global CLIENT
+    try:
+        await app.bot.set_my_description(
+            "🎓 DigiVerify — Google One AI Student Verification.\n"
+            "💎 Price: $2.50 only after confirmed SUCCESS.\n"
+            "🛡 No wallet charge on failed/pending results.\n"
+            "🔗 Open https://one.google.com/ai-student, copy your complete "
+            "https://services.sheerid.com/verify/... URL and paste it in this bot."
+        )
+        await app.bot.set_my_short_description(
+            "🎓 Student verification • $2.50 on success • no charge on failure."
+        )
+        await app.bot.set_my_commands([
+            ("start","Open main menu"),
+            ("services","Product description and catalog"),
+            ("guide","How to get and submit a SheerID link"),
+            ("verify","Start a verification request"),
+            ("balance","Wallet balance and top-up"),
+            ("history","Your recent verifications"),
+            ("whoami","Your Telegram numeric ID"),
+        ])
+    except Exception:
+        logging.exception("Unable to update Telegram bot profile")
+
     session=os.getenv("TG_SESSION_STRING","")
     api=os.getenv("TG_API_ID","")
     hash=os.getenv("TG_API_HASH","")
@@ -335,7 +369,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("credit",credit),("orders",orders),("whoami",whoami)]:
+    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
