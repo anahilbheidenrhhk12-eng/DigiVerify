@@ -17,6 +17,7 @@ PROVIDER=os.getenv("PROVIDER_USERNAME","gemini_ver_bot").lstrip("@")
 SUPPORT=os.getenv("SUPPORT_USERNAME","").lstrip("@")
 CLIENT=None
 Q=asyncio.Queue()
+CANCEL_REQUESTS=set()
 LOCK=asyncio.Lock()
 
 def db():
@@ -27,6 +28,7 @@ def db():
     c.execute("CREATE TABLE IF NOT EXISTS users(uid INTEGER PRIMARY KEY,balance INTEGER DEFAULT 0,points INTEGER DEFAULT 0,referrer INTEGER)")
     c.execute("CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT,uid INTEGER,url TEXT,status TEXT,result TEXT,created INTEGER)")
     c.execute("CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,uid INTEGER,amount INTEGER,reason TEXT,created INTEGER)")
+    c.execute("CREATE TABLE IF NOT EXISTS extra_admins(uid INTEGER PRIMARY KEY,added_by INTEGER,created INTEGER)")
     c.commit()
     return c
 
@@ -44,7 +46,9 @@ def balance(uid):
         return (r["balance"],r["points"]) if r else (0,0)
 
 def is_admin(uid):
-    return uid in ADMINS
+    if uid in ADMINS: return True
+    with closing(db()) as con:
+        return con.execute("SELECT 1 FROM extra_admins WHERE uid=?",(uid,)).fetchone() is not None
 
 def guide_text():
     return f"""💬 HELP CENTER & USER GUIDE
@@ -123,6 +127,9 @@ def menu():
     ]
     return InlineKeyboardMarkup(buttons)
 
+def admin_menu():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Order",callback_data="admin_cancel_help"),InlineKeyboardButton("👤 Add Admin",callback_data="admin_add_help")],[InlineKeyboardButton("📋 Orders",callback_data="admin_orders")]])
+
 async def start(u,c):
     uid=u.effective_user.id
     ref=int(c.args[0]) if c.args and c.args[0].isdigit() else None
@@ -150,6 +157,8 @@ async def start(u,c):
 • Paste your link DIRECTLY into THIS bot chat!
 
 {prompt}""",reply_markup=menu())
+    if is_admin(uid):
+        await u.effective_message.reply_text("🛠 ADMIN CONTROLS",reply_markup=admin_menu())
 
 async def wallet(u,c):
     user(u.effective_user.id)
@@ -196,6 +205,14 @@ async def callback(u,c):
     q=u.callback_query
     await q.answer()
     action=q.data
+    if action.startswith("admin_"):
+        if not is_admin(q.from_user.id):
+            await q.message.reply_text("⛔ Admin access required."); return
+        if action=="admin_cancel_help": msg="🛑 Cancel an order: /cancel ORDER_ID. Queued orders are stopped immediately; active provider requests cannot be recalled after submission."
+        elif action=="admin_add_help": msg="👤 Add another admin: /addadmin TELEGRAM_USER_ID. New admins can manage orders and wallet, and test for free."
+        elif action=="admin_orders": return await orders(u,c)
+        else: msg="Unknown admin action."
+        await q.message.reply_text(msg); return
     if action=="wallet": return await wallet(u,c)
     if action=="history": return await history(u,c)
     uid=q.from_user.id
@@ -244,7 +261,7 @@ def finish(oid,status,detail=""):
     with closing(db()) as con:
         con.execute("BEGIN IMMEDIATE")
         row=con.execute("SELECT uid,status FROM orders WHERE id=?",(oid,)).fetchone()
-        if not row or row["status"] in ("success","failed","review"):
+        if not row or row["status"] in ("success","failed","review","cancelled"):
             con.rollback(); return "review"
         if status=="success" and not is_admin(row["uid"]):
             changed=con.execute("UPDATE users SET balance=balance-? WHERE uid=? AND balance>=?",(PRICE,row["uid"],PRICE))
@@ -270,7 +287,10 @@ async def worker(app):
         oid,uid,url=await Q.get()
         try:
             with closing(db()) as con:
-                con.execute("UPDATE orders SET status='processing' WHERE id=?",(oid,))
+                state=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
+            if not state or state["status"]!="queued": continue
+            with closing(db()) as con:
+                con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
                 con.commit()
             await app.bot.send_message(uid,"📩 VERIFICATION REQUEST RECEIVED\n🆔 Order #"+str(oid)+"\n⏳ Processing...")
             if not CLIENT:
@@ -278,7 +298,13 @@ async def worker(app):
                 await app.bot.send_message(uid,"⚠️ Service not connected. No balance deducted.")
                 continue
             async with LOCK:
+                with closing(db()) as con:
+                    state=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
+                if not state or state["status"]=="cancelled": continue
                 async with CLIENT.conversation(PROVIDER,timeout=360,exclusive=True) as conv:
+                    with closing(db()) as con:
+                        state=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
+                    if not state or state["status"]=="cancelled": continue
                     await conv.send_message(url)
                     outcome=None
                     deadline=time.monotonic()+360
@@ -304,8 +330,50 @@ async def worker(app):
             except Exception: pass
         finally: Q.task_done()
 
+async def addadmin(u,c):
+    if not is_admin(u.effective_user.id): return
+    try:
+        uid=int(c.args[0])
+        if uid<=0: raise ValueError()
+    except (IndexError,ValueError):
+        await u.message.reply_text("Usage: /addadmin TELEGRAM_USER_ID"); return
+    with closing(db()) as con:
+        con.execute("INSERT OR IGNORE INTO extra_admins(uid,added_by,created) VALUES (?,?,?)",(uid,u.effective_user.id,int(time.time())))
+        con.commit()
+    await u.message.reply_text(f"✅ Admin {uid} added. They can use /start to access admin controls.")
+
+async def admins_command(u,c):
+    if not is_admin(u.effective_user.id): return
+    with closing(db()) as con:
+        ids=[r["uid"] for r in con.execute("SELECT uid FROM extra_admins ORDER BY created")]
+    await u.message.reply_text("👤 ADMINS\nPrimary: "+", ".join(map(str,sorted(ADMINS)))+"\nAdditional: "+(", ".join(map(str,ids)) if ids else "None"))
+
+async def cancel_order(u,c,oid):
+    if not is_admin(u.effective_user.id): return
+    with closing(db()) as con:
+        con.execute("BEGIN IMMEDIATE")
+        row=con.execute("SELECT uid,status FROM orders WHERE id=?",(oid,)).fetchone()
+        if not row:
+            con.rollback(); await u.effective_message.reply_text("❌ Order not found."); return
+        if row["status"] not in ("queued","processing"):
+            con.rollback(); await u.effective_message.reply_text(f"⚠️ Order #{oid} already {row['status']}; cannot cancel."); return
+        con.execute("UPDATE orders SET status='cancelled',result='Cancelled by admin' WHERE id=?",(oid,))
+        con.commit()
+    await u.effective_message.reply_text(f"🛑 Order #{oid} cancelled. No wallet deduction. If it was already sent to the provider, the external request cannot be recalled.")
+    try: await c.bot.send_message(row["uid"],f"🛑 Order #{oid} cancelled by admin. No wallet deduction.")
+    except Exception: logging.exception("Could not notify cancelled order")
+
+async def cancel_command(u,c):
+    if not is_admin(u.effective_user.id): return
+    try:
+        oid=int(c.args[0])
+        if oid<=0: raise ValueError()
+    except (IndexError,ValueError):
+        await u.message.reply_text("Usage: /cancel ORDER_ID"); return
+    await cancel_order(u,c,oid)
+
 async def credit(u,c):
-    if u.effective_user.id not in ADMINS: return
+    if not is_admin(u.effective_user.id): return
     try:
         uid=int(c.args[0]); cents=int(Decimal(c.args[1])*100)
         if cents<=0 or cents>100000000: raise ValueError()
@@ -320,10 +388,10 @@ async def credit(u,c):
     await u.message.reply_text("✅ Added $"+format(cents/100,".2f")+" to "+str(uid))
 
 async def orders(u,c):
-    if u.effective_user.id not in ADMINS: return
+    if not is_admin(u.effective_user.id): return
     with closing(db()) as con:
         rows=con.execute("SELECT id,uid,status FROM orders ORDER BY id DESC LIMIT 15").fetchall()
-    await u.message.reply_text("📋 ORDERS\n"+("\n".join("#"+str(r["id"])+" "+str(r["uid"])+" "+r["status"] for r in rows) or "None"))
+    await u.effective_message.reply_text("📋 ORDERS\n"+("\n".join("#"+str(r["id"])+" "+str(r["uid"])+" "+r["status"] for r in rows) or "None")+"\n\nTo cancel: /cancel ORDER_ID",reply_markup=admin_menu())
 
 async def services_command(u,c):
     user(u.effective_user.id)
@@ -360,6 +428,9 @@ async def init(app):
             ("balance","Wallet balance and top-up"),
             ("history","Your recent verifications"),
             ("whoami","Your Telegram numeric ID"),
+            ("cancel","Admin: cancel a queued order"),
+            ("addadmin","Admin: grant admin access"),
+            ("admins","Admin: list administrators"),
         ])
     except Exception:
         logging.exception("Unable to update Telegram bot profile")
@@ -394,7 +465,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("whoami",whoami)]:
+    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
