@@ -71,7 +71,7 @@ class ProviderMirror:
     async def _claim(self, uid, reset=False):
         if not self.may_start(uid):
             return False
-        if self.owner != uid:
+        if self.owner != uid or reset:
             self.owner = uid
             self.callbacks.clear()
             self.sent.clear()
@@ -83,6 +83,16 @@ class ProviderMirror:
     async def open(self, uid):
         async with self.lock:
             return await self._claim(uid, reset=True)
+
+    async def release(self, uid):
+        async with self.lock:
+            if self.owner != uid or self.active_order is not None:
+                return False
+            self.owner = None
+            self.lease_until = 0
+            self.callbacks.clear()
+            self.sent.clear()
+            return True
 
     async def send_text(self, uid, text):
         async with self.lock:
@@ -128,6 +138,7 @@ class ProviderMirror:
             status = self.finish(oid, "review", "Upstream result timeout")
             self.active_order = None
             self.order_owner = None
+            self.lease_until = time.monotonic() + 20
             if status != "cancelled":
                 await self.app.bot.send_message(
                     chat_id=uid,
@@ -262,6 +273,9 @@ class ProviderMirror:
         status=self.finish(orderid,outcome,detail or "")
         self.active_order=None
         self.order_owner=None
+        # The one upstream account should be available for another customer
+        # shortly after the terminal result has arrived.
+        self.lease_until = time.monotonic() + 20
         if self.timeout_task:
             self.timeout_task.cancel()
         if status=="success":
