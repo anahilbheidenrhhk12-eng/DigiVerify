@@ -1,36 +1,63 @@
-# DigiVerify Bot
+# DigiVerify — Telegram Student Verification Reseller Bot
 
-Telegram reseller workflow for authorized student verification services.
+Customer bot: [@DigitopVerifyBot](https://t.me/DigitopVerifyBot)  
+Source verification bot: @gemini_ver_bot (via an authorized separate Telegram account)  
+Hosted on Railway; persisted in SQLite on a Railway volume at /data.
 
-## Features
-- Customer menu, balance, history, referrals and support
-- $2.50 charge only after confirmed successful verification
-- FIFO queue and one-at-a-time provider connection via an authorized Telegram account
-- On failure or timeout, customer is not charged
-- Admin commands for crediting accounts and reviewing orders
-- No fabricated identity documents or false claims of verification
+## Customer experience
+
+1. Start the Telegram bot with \`/start\`.
+2. Tap **Edu Services** or use \`/services\` to see the product catalog and price.
+3. Tap **Help & Guide** or use \`/guide\`:
+   - Open https://one.google.com/ai-student.
+   - Choose the student discount and continue to SheerID.
+   - Copy the complete browser URL beginning \`https://services.sheerid.com/verify/...\`.
+   - Paste that **full link directly into the bot chat**.
+4. The bot checks the wallet before it accepts any request.
+5. A successful verification costs **$2.50**; failed or inconclusive attempts do not deduct funds. The original provider decides verification outcomes.
+6. On a confirmed failure, the customer is told to refresh their link and try again.
+
+**Only original, eligible student information and documents may be used.** This bot does not independently determine student eligibility.
+
+## Wallet policy
+
+- **Administrator**: Unlimited test submissions to DigiVerify without a wallet balance; no wallet charge on success. Admin status comes strictly from the numeric Telegram user ID in \`ADMIN_IDS\`. This does **not** waive any fees or limits imposed by the upstream provider.
+- **Ordinary user**: Must have **at least $2.50 in the wallet before submission**. Pressing Verify or sending a link does not bypass the balance check.
+- **Success**: Deduct $2.50 once, never for admin.
+- **Failure/pending/review**: Deduct $0. No automatic refunds are necessary because charging occurs only on confirmed success.
+- **Top-up**: Contact support and pay through an arrangement with the administrator, who uses \`/credit USER_ID AMOUNT\` to credit the wallet. **This version does not automatically collect Binance Pay/USDT or other payments.**
+
+## Admin commands
+
+- \`/whoami\` — discover your numeric Telegram user ID.
+- \`/credit USER_ID AMOUNT\` — add USD to a customer's wallet (example: \`/credit 123456789 10.00\`).
+- \`/orders\` — see recent orders.
+- \`/balance\` — your wallet and admin test status.
+- \`/services\`, \`/guide\`, \`/verify\` — see customer-facing descriptions.
+
+For admin privileges, set \`ADMIN_IDS\` on Railway to your own numeric Telegram user ID (comma-separated for multiple admins), **not the bot's ID or username**. Use \`/start\` to confirm the phrase **ADMIN TEST MODE — FREE & UNLIMITED** appears.
 
 ## Railway variables
-```
-BOT_TOKEN=...
-ADMIN_IDS=123456789
-TG_API_ID=...
-TG_API_HASH=...
-TG_SESSION_STRING=...
+
+\`\`\`env
+BOT_TOKEN=                    # from BotFather, secret
+ADMIN_IDS=123456789           # numeric Telegram user ID(s)
+TG_API_ID=                    # from my.telegram.org, secret
+TG_API_HASH=                  # from my.telegram.org, secret
+TG_SESSION_STRING=            # generated locally by setup_session.py, secret
 PROVIDER_USERNAME=gemini_ver_bot
 PRICE_CENTS=250
 DATABASE_PATH=/data/digiverify.sqlite3
-SUPPORT_USERNAME=your_support_username
-```
+SUPPORT_USERNAME=             # optional, without the @
+\`\`\`
 
-For automatic fulfillment, the separate Telegram account must have access to the provider and you must be permitted to automate and resell its service. A session string is created on your own computer, not through a publicly exposed form.
+Never commit secrets to GitHub. The \`setup_session.py\` utility creates a user session on your own PC; keep it secret and add it to Railway Variables.
 
-Deploy: install dependencies from `requirements.txt`, run `python bot.py`, and mount a persistent Railway volume at `/data`.
+This app requires a persistent Railway volume mounted at \`/data\`. Deploy from GitHub \`main\`, Dockerfile build, run \`python bot.py\`.
 
-## Administrator commands
-`/credit USER_ID AMOUNT` adds USD credit (e.g. `/credit 12345 10.00`).
-`/orders` shows recent orders.
-`/balance` shows your own balance.
-`/whoami` shows your Telegram numeric user ID.
+## Implementation limits
 
-Customer payments are tracked as manual admin-approved credits, not as automatic real-money collection.
+- Requests are serialized through the provider account to avoid mixing responses.
+- Only explicit successful verification accompanied by an official Google One activation URL is treated as success.
+- Provider replies and real enrollment must be checked end-to-end; screenshots alone cannot guarantee the upstream bot's current behavior.
+- Interacting with the upstream bot is subject to that service's authorization and resale rules.
