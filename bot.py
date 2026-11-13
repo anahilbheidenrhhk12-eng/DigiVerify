@@ -115,11 +115,11 @@ https://services.sheerid.com/verify/...
 
 def menu():
     buttons=[
-      [InlineKeyboardButton("🎓 Verify Student",callback_data="verify")],
-      [InlineKeyboardButton("💰 Wallet / Top Up",callback_data="wallet"),InlineKeyboardButton("📜 History",callback_data="history")],
-      [InlineKeyboardButton("💎 VIP Priority",callback_data="vip"),InlineKeyboardButton("🎁 Invite Friends",callback_data="invite")],
-      [InlineKeyboardButton("🎟 Promo Code",callback_data="promo"),InlineKeyboardButton("📚 Edu Services",callback_data="services")],
-      [InlineKeyboardButton("❓ Help & Guide",callback_data="help"),InlineKeyboardButton("🛟 Support",callback_data="support")]
+      [InlineKeyboardButton("💰 Top Up / Wallet",callback_data="wallet"),InlineKeyboardButton("🛍 Edu Services",callback_data="services")],
+      [InlineKeyboardButton("📋 History & Balance",callback_data="history"),InlineKeyboardButton("🎟 Promo Code",callback_data="promo")],
+      [InlineKeyboardButton("👥 Invite Friends (+3 pts)",callback_data="invite"),InlineKeyboardButton("💬 Support",callback_data="support")],
+      [InlineKeyboardButton("💬 Help & Guide",callback_data="help"),InlineKeyboardButton("🎓 Verify Student",callback_data="verify")],
+      [InlineKeyboardButton("💎 VIP Priority",callback_data="vip")]
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -163,9 +163,34 @@ async def wallet(u,c):
     await u.effective_message.reply_text(msg)
 
 async def history(u,c):
+    uid=u.effective_user.id
+    user(uid)
+    cash,points=balance(uid)
     with closing(db()) as con:
-        rows=con.execute("SELECT id,status FROM orders WHERE uid=? ORDER BY id DESC LIMIT 12",(u.effective_user.id,)).fetchall()
-    await u.effective_message.reply_text("📜 HISTORY\n"+("\n".join("#"+str(r["id"])+" — "+r["status"] for r in rows) or "No orders yet."))
+        completed=con.execute("SELECT COUNT(*) AS n FROM orders WHERE uid=? AND status='success'",(uid,)).fetchone()["n"]
+        failed=con.execute("SELECT COUNT(*) AS n FROM orders WHERE uid=? AND status='failed'",(uid,)).fetchone()["n"]
+        pending=con.execute("SELECT COUNT(*) AS n FROM orders WHERE uid=? AND status IN ('queued','processing','review')",(uid,)).fetchone()["n"]
+        topups=con.execute("SELECT COALESCE(SUM(amount),0) AS amount FROM ledger WHERE uid=? AND amount>0",(uid,)).fetchone()["amount"]
+        rows=con.execute("SELECT id,status FROM orders WHERE uid=? ORDER BY id DESC LIMIT 7",(uid,)).fetchall()
+        recent=con.execute("SELECT amount,created FROM ledger WHERE uid=? AND amount>0 ORDER BY id DESC LIMIT 3",(uid,)).fetchall()
+    wallet_text="♾ Unlimited admin testing — FREE" if is_admin(uid) else f"USD {format(cash/100,'.2f')} ({cash//PRICE} verifications)"
+    msg=f"""📋 CUSTOMER ACCOUNT & WALLET SUMMARY
+━━━━━━━━━━━━━━━━━━
+👤 Customer: {u.effective_user.first_name}
+🆔 Telegram ID: {uid}
+💰 Wallet Balance: {wallet_text}
+✨ Reward Points: {points} pts
+💵 Total Top-up: USD {format(topups/100,'.2f')}
+✅ Successful Verifications: {completed}
+❌ Failed Attempts (zero charge): {failed}
+⏳ Pending / Review: {pending}
+
+💳 Recent Top-ups:
+"""
+    msg+=("\n".join(f"• +USD {format(r['amount']/100,'.2f')} on {time.strftime('%Y-%m-%d %H:%M',time.gmtime(r['created']))} UTC" for r in recent) if recent else "• No top-ups")
+    msg+="\n\n📜 Recent Requests:\n"
+    msg+=("\n".join(f"• #{r['id']} — {r['status'].upper()}" for r in rows) if rows else "• No orders yet")
+    await u.effective_message.reply_text(msg)
 
 async def callback(u,c):
     q=u.callback_query
