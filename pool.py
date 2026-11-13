@@ -10,7 +10,7 @@ import time
 LOG=logging.getLogger(__name__)
 
 class MirrorPool:
-    def __init__(self,mirrors,bot,finished=None):
+    def __init__(self,mirrors,bot,finished=None,started=None):
         self.mirrors=mirrors
         self.bot=bot
         self.owners={}
@@ -18,6 +18,7 @@ class MirrorPool:
         self.queued_orders={}
         self.lock=asyncio.Lock()
         self.finished=finished
+        self.started=started
 
     def _find(self,uid):
         m=self.owners.get(uid)
@@ -106,6 +107,7 @@ class MirrorPool:
                         await assigned.release(uid)
                         self.owners.pop(uid,None)
                         return
+                    if self.started: self.started(oid)
                     await self.bot.send_message(uid,f"📨 Order #{oid}: your turn has arrived. The original bot is processing your link.")
                 else:
                     await self.bot.send_message(uid,"✅ Your turn has arrived! The original bot is opening now.")
