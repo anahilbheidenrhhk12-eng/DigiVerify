@@ -6,6 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from mirror import ProviderMirror
 
 logging.basicConfig(level=logging.WARNING)
 TOKEN=os.getenv("BOT_TOKEN","")
@@ -16,6 +17,7 @@ PRICE_LABEL="$"+format(PRICE/100,".2f")
 PROVIDER=os.getenv("PROVIDER_USERNAME","gemini_ver_bot").lstrip("@")
 SUPPORT=os.getenv("SUPPORT_USERNAME","").lstrip("@")
 CLIENT=None
+MIRROR=None
 Q=asyncio.Queue()
 CANCEL_REQUESTS=set()
 LOCK=asyncio.Lock()
@@ -134,6 +136,16 @@ async def start(u,c):
     uid=u.effective_user.id
     ref=int(c.args[0]) if c.args and c.args[0].isdigit() else None
     user(uid,ref)
+    if MIRROR is not None:
+        if not await MIRROR.open(uid):
+            await u.effective_message.reply_text("⏳ The upstream Telegram account is currently handling another customer. Please try /start again shortly.")
+            return
+        if is_admin(uid):
+            await u.effective_message.reply_text("🛠 ADMIN CONTROLS",reply_markup=admin_menu())
+        else:
+            cash,_=balance(uid)
+            await u.effective_message.reply_text(f"💰 DigiVerify wallet: USD {cash/100:.2f}\n💎 Successful verification: {PRICE_LABEL}\n🛡 Failed / pending attempts: no charge.\n🔒 Add funds before sending a verification link.")
+        return
     amount,points=balance(uid)
     role=("♾ ADMIN TEST MODE — FREE & UNLIMITED" if is_admin(uid)
           else f"💰 Wallet Balance: USD {format(amount/100,'.2f')}")
@@ -203,8 +215,22 @@ async def history(u,c):
 
 async def callback(u,c):
     q=u.callback_query
+    action=q.data or ""
+    if action.startswith("up:"):
+        if MIRROR is None:
+            await q.answer("Provider mirror unavailable",show_alert=True)
+            return
+        try:
+            ok,popup=await MIRROR.press(q.from_user.id,action[3:])
+            if ok:
+                await q.answer((popup or "Sent to original bot.")[:190])
+            else:
+                await q.answer(popup[:190],show_alert=True)
+        except Exception:
+            logging.exception("Upstream button relay failed")
+            await q.answer("Original bot did not accept this action.",show_alert=True)
+        return
     await q.answer()
-    action=q.data
     if action.startswith("admin_"):
         if not is_admin(q.from_user.id):
             await q.message.reply_text("⛔ Admin access required."); return
@@ -237,10 +263,22 @@ def valid(url):
 async def intake(u,c):
     url=u.message.text.strip()
     if not valid(url):
+        if MIRROR is not None and not url.lower().startswith("https://services.sheerid.com/verify/"):
+            try:
+                ok=await MIRROR.send_text(u.effective_user.id,url)
+            except Exception:
+                logging.exception("Cannot forward original bot command")
+                ok=False
+            if not ok:
+                await u.message.reply_text("⏳ Your upstream session is busy or expired. Use /start to reopen the original bot.")
+            return
         await u.message.reply_text("Please send a valid https://services.sheerid.com/verify/... URL.")
         return
     uid=u.effective_user.id
     user(uid)
+    if MIRROR is not None and not MIRROR.may_start(uid):
+        await u.message.reply_text("⏳ The upstream account is busy with another customer. Retry once their session finishes.")
+        return
     with closing(db()) as con:
         con.execute("BEGIN IMMEDIATE")
         current=con.execute("SELECT balance FROM users WHERE uid=?",(uid,)).fetchone()["balance"]
@@ -254,6 +292,21 @@ async def intake(u,c):
         cur=con.execute("INSERT INTO orders(uid,url,status,created) VALUES (?,?,?,?)",(uid,url,"queued",int(time.time())))
         oid=cur.lastrowid
         con.commit()
+    if MIRROR is not None:
+        try:
+            accepted=await MIRROR.submit_order(uid,oid,url)
+        except Exception:
+            logging.exception("Upstream request could not be sent")
+            accepted=False
+        if not accepted:
+            finish(oid,"review","Upstream account busy or unavailable, request not submitted")
+            await u.message.reply_text("⚠️ The original bot was not available. The request was not submitted, and your wallet was not charged.")
+            return
+        with closing(db()) as con:
+            con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
+            con.commit()
+        await u.message.reply_text(f"📨 Request #{oid} sent to the ORIGINAL bot. Its actual messages and buttons will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. All original responses will be mirrored. Free admin test.")
+        return
     await Q.put((oid,uid,url))
     await u.message.reply_text(f"💎 VERIFICATION REQUEST QUEUED\n━━━━━━━━━━━━━━━━━━\n🆔 Order #{oid}\n⏳ Waiting for processing.\n"+("♾ Admin test: FREE — no wallet deduction." if is_admin(uid) else f"💰 {PRICE_LABEL} charged only on SUCCESS."))
 
@@ -362,6 +415,7 @@ async def cancel_order(u,c,oid):
             con.rollback(); await u.effective_message.reply_text(f"⚠️ Order #{oid} already {row['status']}; cannot cancel."); return
         con.execute("UPDATE orders SET status='cancelled',result='Cancelled by admin' WHERE id=?",(oid,))
         con.commit()
+    if MIRROR is not None: MIRROR.cancel(oid)
     await u.effective_message.reply_text(f"🛑 Order #{oid} cancelled. No wallet deduction. If it was already sent to the provider, the external request cannot be recalled.")
     try: await c.bot.send_message(row["uid"],f"🛑 Order #{oid} cancelled by admin. No wallet deduction.")
     except Exception: logging.exception("Could not notify cancelled order")
@@ -411,7 +465,7 @@ async def whoami(u,c):
     await u.message.reply_text("Your Telegram ID: "+str(u.effective_user.id))
 
 async def init(app):
-    global CLIENT
+    global CLIENT,MIRROR
     try:
         await app.bot.set_my_description(
             "🎓 DigiVerify — Google One AI Student Verification.\n"
@@ -448,13 +502,23 @@ async def init(app):
             if not await CLIENT.is_user_authorized():
                 await CLIENT.disconnect(); CLIENT=None
                 logging.error("Telegram session not authorized")
+            else:
+                mirror=ProviderMirror(
+                    CLIENT,PROVIDER,app,finish,classify,is_admin,PRICE_LABEL,
+                    session_ttl=int(os.getenv("MIRROR_SESSION_TTL","300")),
+                    result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360"))
+                )
+                await mirror.start()
+                MIRROR=mirror
         except Exception:
             logging.exception("Unable to connect Telegram account")
             CLIENT=None
     with closing(db()) as con:
         con.execute("UPDATE orders SET status='review',result='Restart; check original provider status' WHERE status IN ('queued','processing')")
         con.commit()
-    app.bot_data["worker"]=asyncio.create_task(worker(app))
+    if MIRROR is None:
+        logging.warning("Mirror not available. Falling back to legacy upstream request workflow.")
+        app.bot_data["worker"]=asyncio.create_task(worker(app))
 
 async def shutdown(app):
     task=app.bot_data.get("worker")
@@ -462,6 +526,7 @@ async def shutdown(app):
         task.cancel()
         try: await task
         except asyncio.CancelledError: pass
+    if MIRROR: await MIRROR.stop()
     if CLIENT: await CLIENT.disconnect()
 
 def main():
