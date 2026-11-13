@@ -12,6 +12,7 @@ TOKEN=os.getenv("BOT_TOKEN","")
 ADMINS={int(x) for x in os.getenv("ADMIN_IDS","").split(",") if x.strip().isdigit()}
 PATH=os.getenv("DATABASE_PATH","/data/digiverify.sqlite3")
 PRICE=int(os.getenv("PRICE_CENTS","250"))
+PRICE_LABEL="$"+format(PRICE/100,".2f")
 PROVIDER=os.getenv("PROVIDER_USERNAME","gemini_ver_bot").lstrip("@")
 SUPPORT=os.getenv("SUPPORT_USERNAME","").lstrip("@")
 CLIENT=None
@@ -34,13 +35,83 @@ def user(uid,ref=None):
         if c.execute("SELECT uid FROM users WHERE uid=?",(uid,)).fetchone(): return
         if ref==uid or not ref or not c.execute("SELECT uid FROM users WHERE uid=?",(ref,)).fetchone(): ref=None
         c.execute("INSERT INTO users(uid,referrer) VALUES (?,?)",(uid,ref))
-        if ref: c.execute("UPDATE users SET points=points+1 WHERE uid=?",(ref,))
+        if ref: c.execute("UPDATE users SET points=points+3 WHERE uid=?",(ref,))
         c.commit()
 
 def balance(uid):
     with closing(db()) as c:
         r=c.execute("SELECT balance,points FROM users WHERE uid=?",(uid,)).fetchone()
         return (r["balance"],r["points"]) if r else (0,0)
+
+def is_admin(uid):
+    return uid in ADMINS
+
+def guide_text():
+    return f"""💬 HELP CENTER & USER GUIDE
+━━━━━━━━━━━━━━━━━━
+❓ 1. How to obtain a valid SheerID verification link:
+
+• Step 1: Open Google One Student Page:
+https://one.google.com/ai-student
+• Step 2: Choose the student discount. The page will redirect to SheerID.
+• Step 3: Copy the COMPLETE URL from your browser address bar. It must begin with:
+https://services.sheerid.com/verify/...
+• Step 4: Paste that FULL LINK directly into THIS bot chat. Do not send screenshots or shortened links.
+
+🛡 2. Customer Satisfaction Guarantee:
+• Only charged when verification is CONFIRMED SUCCESSFUL.
+• Failed or pending attempts: ZERO wallet deduction.
+• If verification fails: refresh the link and try again.
+• Use only genuine eligible student details and documents.
+
+☎️ 3. Customer Support:
+{('@' + SUPPORT) if SUPPORT else 'Contact the administrator to top up or request help.'}
+
+👇 Use the buttons below to view your wallet or the services catalog."""
+
+def catalog_text(uid):
+    cash,pts=balance(uid)
+    credit="♾ Unlimited admin testing (FREE)" if is_admin(uid) else f"USD {format(cash/100,'.2f')} ({cash//PRICE} available verification(s))"
+    return f"""🛍 EDUCATIONAL & VERIFICATION SERVICES CATALOG
+━━━━━━━━━━━━━━━━━━
+🎓 1. SheerID Student Verification (Google One AI Premium 5TB)
+
+• Status: 🟢 Automated submission to verification service
+• Price: {PRICE_LABEL} per SUCCESSFUL verification
+• Processing Time: Approx. 30–60 seconds; may take longer
+• Satisfaction Guarantee: FAILED or PENDING attempts NEVER DEDUCT CREDITS
+• Requirement: A fresh SheerID link for a genuinely eligible student
+
+🎨 2. Custom Edu Packages (Figma, JetBrains, Notion, Autodesk...)
+• Status: 🟡 Contact support to check availability
+• Pricing: Contact support
+
+━━━━━━━━━━━━━━━━━━
+📊 Your Balance: {credit}
+✨ Reward Points: {pts}
+
+👉 To start verification: Open https://one.google.com/ai-student, select the student offer, copy the FULL SheerID verification URL (https://services.sheerid.com/verify/...) and PASTE it directly into THIS chat!"""
+
+def verify_text(uid):
+    cash,_=balance(uid)
+    gate=("♾ ADMIN TEST MODE: unlimited requests, no wallet deductions." if is_admin(uid)
+          else ("✅ Your wallet is funded. Send your link now." if cash>=PRICE
+                else f"🔒 Wallet insufficient. Top up at least {PRICE_LABEL} BEFORE sending a link. Use 💰 Wallet / Top Up."))
+    return f"""🎓 GOOGLE ONE AI STUDENT VERIFICATION
+━━━━━━━━━━━━━━━━━━
+💎 Service: Google One AI Premium student verification (5TB)
+💵 Price: {PRICE_LABEL} on SUCCESS only
+🛡 Failed or pending attempts: ZERO CHARGE
+
+📋 HOW TO GET YOUR LINK
+1️⃣ Open https://one.google.com/ai-student
+2️⃣ Select the student discount and continue to SheerID.
+3️⃣ Copy the FULL URL from your browser address bar:
+https://services.sheerid.com/verify/...
+4️⃣ Paste that link DIRECTLY into this bot chat.
+5️⃣ Wait for the result here. If it fails, refresh the link and try again.
+
+{gate}"""
 
 def menu():
     buttons=[
@@ -57,12 +128,39 @@ async def start(u,c):
     ref=int(c.args[0]) if c.args and c.args[0].isdigit() else None
     user(uid,ref)
     amount,points=balance(uid)
-    await u.effective_message.reply_text("👋 WELCOME TO DIGIVERIFY! 🎓\n━━━━━━━━━━━━━━━━━━\n👤 Dear Customer: "+u.effective_user.first_name+"\n💰 Balance: $"+format(amount/100,".2f")+"\n🎁 Reward Points: "+str(points)+"\n💎 Student Verification: $"+format(PRICE/100,".2f")+"\n🛡 Failed verification: NO CHARGE\n━━━━━━━━━━━━━━━━━━",reply_markup=menu())
+    role=("♾ ADMIN TEST MODE — FREE & UNLIMITED" if is_admin(uid)
+          else f"💰 Wallet Balance: USD {format(amount/100,'.2f')}")
+    prompt=("👉 Paste a new SheerID link directly into this chat!" if is_admin(uid) or amount>=PRICE
+            else "🔒 Top up your wallet before submitting a link. Unfunded customer trials are blocked.")
+    await u.effective_message.reply_text(
+        f"""👋 WELCOME TO DIGIVERIFY! 🎓
+━━━━━━━━━━━━━━━━━━
+👤 Dear Customer: {u.effective_user.first_name} (ID: {uid})
+{role}
+✨ Reward Points: {points} pts
+━━━━━━━━━━━━━━━━━━
+🎯 Automated Service: SheerID Google One AI Premium (5TB Cloud + Gemini Advanced)
+💎 Price: {PRICE_LABEL} per SUCCESSFUL verification
+🛡 Failed or pending attempts: ZERO CREDITS DEDUCTED
+
+👉 Quick Start:
+• Open https://one.google.com/ai-student
+• Choose the student discount; continue to SheerID
+• Copy the full URL starting with https://services.sheerid.com/verify/...
+• Paste your link DIRECTLY into THIS bot chat!
+
+{prompt}""",reply_markup=menu())
 
 async def wallet(u,c):
     user(u.effective_user.id)
-    a,p=balance(u.effective_user.id)
-    await u.effective_message.reply_text("💰 WALLET\nBalance: $"+format(a/100,".2f")+"\n🎁 Reward Points: "+str(p)+"\n\nTo top up, contact support. Only admins can add confirmed payments.")
+    uid=u.effective_user.id
+    amount,points=balance(uid)
+    if is_admin(uid):
+        msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💎 ADMIN: ♾ UNLIMITED FREE TESTS\n💰 Wallet: USD {format(amount/100,'.2f')} (never charged for admin tests)\n✨ Reward Points: {points}"
+    else:
+        msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💰 Wallet Balance: USD {format(amount/100,'.2f')}\n🎓 Price per SUCCESS: {PRICE_LABEL}\n🎟 Available verifications: {amount//PRICE}\n✨ Reward Points: {points}\n\n🔒 Customers must top up BEFORE submitting their first link.\n🛡 Failed or pending attempts do not deduct credits."
+    msg+="\n\n💳 To top up, contact "+("@"+SUPPORT if SUPPORT else "the administrator")+". An administrator updates your balance after payment confirmation."
+    await u.effective_message.reply_text(msg)
 
 async def history(u,c):
     with closing(db()) as con:
@@ -75,16 +173,17 @@ async def callback(u,c):
     action=q.data
     if action=="wallet": return await wallet(u,c)
     if action=="history": return await history(u,c)
-    if action=="verify": msg="🎓 GOOGLE STUDENT VERIFICATION\nSend your current URL:\nhttps://services.sheerid.com/verify/...\n\nOnly successful verifications are charged."
+    uid=q.from_user.id
+    if action=="verify": msg=verify_text(uid)
     elif action=="invite":
         bot=await c.bot.get_me()
-        msg="🎁 INVITE FRIENDS\nhttps://t.me/"+bot.username+"?start="+str(q.from_user.id)+"\nEarn 1 point for every new member."
-    elif action=="vip": msg="💎 VIP PRIORITY\nPriority plans are not enabled at this time."
-    elif action=="promo": msg="🎟 PROMO CODE\nNo active codes."
-    elif action=="services": msg="📚 EDU SERVICES\n🎓 Student Verification — $"+format(PRICE/100,".2f")+" on success."
-    elif action=="help": msg="❓ HELP\nSend your own valid SheerID verification link and wait for the result. Use authentic student credentials and documents. Refresh the link and retry after a confirmed failure."
-    elif action=="support": msg="🛟 SUPPORT\n"+("@"+SUPPORT if SUPPORT else "Contact your administrator.")
-    else: msg="Use /start"
+        msg=f"👥 INVITE FRIENDS (+3 pts)\n━━━━━━━━━━━━━━━━━━\nShare your invite link:\nhttps://t.me/{bot.username}?start={uid}\n\n🎁 Earn 3 reward points for each new user who joins through your referral."
+    elif action=="vip": msg="💎 VIP PRIORITY\nThe queue currently processes requests in arrival order. Administrators have unlimited wallet-free testing."
+    elif action=="promo": msg="🎟 PROMO CODE\nNo active promotional codes at present."
+    elif action=="services": msg=catalog_text(uid)
+    elif action=="help": msg=guide_text()
+    elif action=="support": msg="🛟 CUSTOMER SUPPORT\n"+("@"+SUPPORT if SUPPORT else "Contact the administrator for support and top-up instructions.")
+    else: msg="Use /start to open the main menu."
     await q.message.reply_text(msg)
 
 def valid(url):
@@ -106,13 +205,15 @@ async def intake(u,c):
         pending=con.execute("SELECT 1 FROM orders WHERE uid=? AND status IN ('queued','processing')",(uid,)).fetchone()
         if pending:
             con.rollback(); await u.message.reply_text("You already have an active request."); return
-        if current<PRICE:
-            con.rollback(); await u.message.reply_text("❌ Insufficient funds. Required: $"+format(PRICE/100,".2f")); return
+        if not is_admin(uid) and current<PRICE:
+            con.rollback()
+            await u.message.reply_text(f"🔒 WALLET TOP-UP REQUIRED\n\n🎓 Price: {PRICE_LABEL}\n💰 Your balance: USD {format(current/100,'.2f')}\n\nPlease add funds to your wallet BEFORE submitting a verification link. Tap 💰 Wallet / Top Up or contact support.\n🛡 Failed orders do not deduct credits.",reply_markup=menu())
+            return
         cur=con.execute("INSERT INTO orders(uid,url,status,created) VALUES (?,?,?,?)",(uid,url,"queued",int(time.time())))
         oid=cur.lastrowid
         con.commit()
     await Q.put((oid,uid,url))
-    await u.message.reply_text("🚀 REQUEST QUEUED\n🆔 Order #"+str(oid)+"\n⏳ Waiting for verification.\n💰 No charge unless confirmed successful.")
+    await u.message.reply_text(f"💎 VERIFICATION REQUEST QUEUED\n━━━━━━━━━━━━━━━━━━\n🆔 Order #{oid}\n⏳ Waiting for processing.\n"+("♾ Admin test: FREE — no wallet deduction." if is_admin(uid) else f"💰 {PRICE_LABEL} charged only on SUCCESS."))
 
 def finish(oid,status,detail=""):
     with closing(db()) as con:
@@ -120,7 +221,7 @@ def finish(oid,status,detail=""):
         row=con.execute("SELECT uid,status FROM orders WHERE id=?",(oid,)).fetchone()
         if not row or row["status"] in ("success","failed","review"):
             con.rollback(); return "review"
-        if status=="success":
+        if status=="success" and not is_admin(row["uid"]):
             changed=con.execute("UPDATE users SET balance=balance-? WHERE uid=? AND balance>=?",(PRICE,row["uid"],PRICE))
             if not changed.rowcount: status="review"; detail="Insufficient balance at settlement"
             else: con.execute("INSERT INTO ledger(uid,amount,reason,created) VALUES (?,?,?,?)",(row["uid"],-PRICE,"Verification #"+str(oid),int(time.time())))
@@ -163,11 +264,11 @@ async def worker(app):
                         if outcome: break
                     if outcome=="success":
                         status=finish(oid,"success",detail)
-                        if status=="success": await app.bot.send_message(uid,"🎉 VERIFICATION SUCCESSFUL!\n🔗 Activation Link:\n"+detail+"\n💎 Credit used: $"+format(PRICE/100,".2f"))
+                        if status=="success": await app.bot.send_message(uid,"🎉 VERIFICATION SUCCESSFUL! 🎉\n━━━━━━━━━━━━━━━━━━\n🔗 Google One AI (5TB) Activation Link:\n"+detail+"\n\n✨ Congratulations! Click the link above to activate your student discount.\n"+("♾ Admin test — ZERO wallet deductions." if is_admin(uid) else "💎 Credit used: "+PRICE_LABEL))
                         else: await app.bot.send_message(uid,"⚠️ Result needs admin review. No balance deducted.")
                     elif outcome=="failed":
                         finish(oid,"failed")
-                        await app.bot.send_message(uid,"❌ VERIFICATION COULD NOT BE COMPLETED\n🛡 ZERO CREDITS DEDUCTED!\n🔄 Refresh your SheerID link and try again.")
+                        await app.bot.send_message(uid,"❌ VERIFICATION COULD NOT BE COMPLETED\n━━━━━━━━━━━━━━━━━━\n🛡 Satisfaction Guarantee: ZERO CREDITS DEDUCTED from your wallet!\n👉 Please REFRESH your SheerID verification link and try again.\nℹ️ Your balance remains unchanged.")
                     else:
                         finish(oid,"review","Result missing or timeout")
                         await app.bot.send_message(uid,"⚠️ Verification result not confirmed. No balance deducted. Contact support before retrying.")
