@@ -44,6 +44,7 @@ class ProviderMirror:
         self.callbacks = {}
         self.sent = {}
         self.mute_until = 0
+        self.on_terminal = None
 
     async def start(self):
         self.peer = await self.client.get_entity(self.provider_name)
@@ -139,6 +140,8 @@ class ProviderMirror:
             self.active_order = None
             self.order_owner = None
             self.lease_until = time.monotonic() + 20
+            if self.on_terminal:
+                asyncio.create_task(self.on_terminal(self,uid))
             if status != "cancelled":
                 await self.app.bot.send_message(
                     chat_id=uid,
@@ -278,6 +281,8 @@ class ProviderMirror:
         self.lease_until = time.monotonic() + 20
         if self.timeout_task:
             self.timeout_task.cancel()
+        if self.on_terminal:
+            asyncio.create_task(self.on_terminal(self,uid))
         if status=="success":
             await self.app.bot.send_message(
                 uid,"✅ DigiVerify payment confirmed: "
