@@ -261,8 +261,10 @@ def finish(oid,status,detail=""):
     with closing(db()) as con:
         con.execute("BEGIN IMMEDIATE")
         row=con.execute("SELECT uid,status FROM orders WHERE id=?",(oid,)).fetchone()
-        if not row or row["status"] in ("success","failed","review","cancelled"):
+        if not row:
             con.rollback(); return "review"
+        if row["status"] in ("success","failed","review","cancelled"):
+            con.rollback(); return row["status"]
         if status=="success" and not is_admin(row["uid"]):
             changed=con.execute("UPDATE users SET balance=balance-? WHERE uid=? AND balance>=?",(PRICE,row["uid"],PRICE))
             if not changed.rowcount: status="review"; detail="Insufficient balance at settlement"
@@ -316,17 +318,18 @@ async def worker(app):
                     if outcome=="success":
                         status=finish(oid,"success",detail)
                         if status=="success": await app.bot.send_message(uid,"🎉 VERIFICATION SUCCESSFUL! 🎉\n━━━━━━━━━━━━━━━━━━\n🔗 Google One AI (5TB) Activation Link:\n"+detail+"\n\n✨ Congratulations! Click the link above to activate your student discount.\n"+("♾ Admin test — ZERO wallet deductions." if is_admin(uid) else "💎 Credit used: "+PRICE_LABEL))
-                        else: await app.bot.send_message(uid,"⚠️ Result needs admin review. No balance deducted.")
+                        elif status!="cancelled": await app.bot.send_message(uid,"⚠️ Result needs admin review. No balance deducted.")
                     elif outcome=="failed":
-                        finish(oid,"failed")
-                        await app.bot.send_message(uid,"❌ VERIFICATION COULD NOT BE COMPLETED\n━━━━━━━━━━━━━━━━━━\n🛡 Satisfaction Guarantee: ZERO CREDITS DEDUCTED from your wallet!\n👉 Please REFRESH your SheerID verification link and try again.\nℹ️ Your balance remains unchanged.")
+                        status=finish(oid,"failed")
+                        if status!="cancelled": await app.bot.send_message(uid,"❌ VERIFICATION COULD NOT BE COMPLETED\n━━━━━━━━━━━━━━━━━━\n🛡 Satisfaction Guarantee: ZERO CREDITS DEDUCTED from your wallet!\n👉 Please REFRESH your SheerID verification link and try again.\nℹ️ Your balance remains unchanged.")
                     else:
-                        finish(oid,"review","Result missing or timeout")
-                        await app.bot.send_message(uid,"⚠️ Verification result not confirmed. No balance deducted. Contact support before retrying.")
+                        status=finish(oid,"review","Result missing or timeout")
+                        if status!="cancelled": await app.bot.send_message(uid,"⚠️ Verification result not confirmed. No balance deducted. Contact support before retrying.")
         except Exception:
             logging.exception("Order %s failed",oid)
-            finish(oid,"review","Provider exception")
-            try: await app.bot.send_message(uid,"⚠️ Processing was interrupted. No charge; contact support.")
+            status=finish(oid,"review","Provider exception")
+            try:
+                if status!="cancelled": await app.bot.send_message(uid,"⚠️ Processing was interrupted. No charge; contact support.")
             except Exception: pass
         finally: Q.task_done()
 
