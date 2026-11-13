@@ -61,3 +61,13 @@ This app requires a persistent Railway volume mounted at \`/data\`. Deploy from 
 - Only explicit successful verification accompanied by an official Google One activation URL is treated as success.
 - Provider replies and real enrollment must be checked end-to-end; screenshots alone cannot guarantee the upstream bot's current behavior.
 - Interacting with the upstream bot is subject to that service's authorization and resale rules.
+
+## Additional administrator controls
+
+- `/addadmin TELEGRAM_USER_ID`: add another administrator permanently in SQLite (same operational privileges, including free testing and wallet credit). Existing administrators can use this command.
+- `/admins`: list primary and additional administrators.
+- `/orders`: list order IDs.
+- `/cancel ORDER_ID`: cancel a queued or processing order, without charging the customer. Requests already forwarded to the external provider cannot be recalled, but their result is ignored locally and no charge is applied.
+- `/start`: shows the administrator control buttons **Cancel Order**, **Add Admin**, and **Orders** for administrators only.
+
+The original administrators in Railway `ADMIN_IDS` remain recognized. Additional administrators are stored in the persistent database at `/data`.
