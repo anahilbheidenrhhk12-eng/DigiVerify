@@ -217,6 +217,9 @@ async def callback(u,c):
     q=u.callback_query
     action=q.data or ""
     if action.startswith("up:"):
+        if not is_admin(q.from_user.id) and balance(q.from_user.id)[0] < PRICE:
+            await q.answer("Top up the DigiVerify wallet first.",show_alert=True)
+            return
         if MIRROR is None:
             await q.answer("Provider mirror unavailable",show_alert=True)
             return
@@ -264,6 +267,9 @@ async def intake(u,c):
     url=u.message.text.strip()
     if not valid(url):
         if MIRROR is not None and not url.lower().startswith("https://services.sheerid.com/verify/"):
+            if not is_admin(u.effective_user.id) and balance(u.effective_user.id)[0] < PRICE:
+                await u.message.reply_text(f"🔒 Top up your wallet first. You need {PRICE_LABEL} to interact with the original verification service.")
+                return
             try:
                 ok=await MIRROR.send_text(u.effective_user.id,url)
             except Exception:
@@ -461,6 +467,13 @@ async def verify_command(u,c):
     user(u.effective_user.id)
     await u.effective_message.reply_text(verify_text(u.effective_user.id))
 
+async def release_command(u,c):
+    if MIRROR is None:
+        await u.effective_message.reply_text("Provider mirror is offline.")
+        return
+    ok=await MIRROR.release(u.effective_user.id)
+    await u.effective_message.reply_text("✅ Original bot session released. Another customer can use it now." if ok else "⚠️ No idle session to release. Wait for the active verification to finish.")
+
 async def whoami(u,c):
     await u.message.reply_text("Your Telegram ID: "+str(u.effective_user.id))
 
@@ -485,6 +498,7 @@ async def init(app):
             ("balance","Wallet balance and top-up"),
             ("history","Your recent verifications"),
             ("whoami","Your Telegram numeric ID"),
+            ("done","Release upstream chat for the next customer"),
             ("cancel","Admin: cancel a queued order"),
             ("addadmin","Admin: grant admin access"),
             ("admins","Admin: list administrators"),
@@ -533,7 +547,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("whoami",whoami)]:
+    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
