@@ -580,27 +580,25 @@ async def init(app):
                 if client:
                     try: await client.disconnect()
                     except Exception: pass
-    if mirrors:
-        def order_open(oid):
-            with closing(db()) as con:
-                row=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
-                return bool(row and row["status"]=="queued")
-        def order_started(oid):
-            with closing(db()) as con:
-                con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
-                con.commit()
-        MIRROR=MirrorPool(mirrors,app.bot,finished=order_open,started=order_started)
-        for mirror in mirrors:
-            mirror.on_terminal=MIRROR.on_finished
-        app.bot_data["mirror_clients"]=clients
-        app.bot_data["pool_worker"]=asyncio.create_task(MIRROR.run())
-        logging.warning("Multi-mirror pool started with %s authorized Telegram accounts",len(mirrors))
+    def order_open(oid):
+        with closing(db()) as con:
+            row=con.execute("SELECT status FROM orders WHERE id=?",(oid,)).fetchone()
+            return bool(row and row["status"]=="queued")
+    def order_started(oid):
+        with closing(db()) as con:
+            con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
+            con.commit()
+    MIRROR=MirrorPool(mirrors,app.bot,finished=order_open,started=order_started)
+    for mirror in mirrors:
+        mirror.on_terminal=MIRROR.on_finished
+    app.bot_data["mirror_clients"]=clients
+    app.bot_data["pool_worker"]=asyncio.create_task(MIRROR.run())
+    logging.warning("Multi-mirror pool started with %s authorized Telegram accounts",len(mirrors))
     with closing(db()) as con:
         con.execute("UPDATE orders SET status='review',result='Restart; check original provider status' WHERE status IN ('queued','processing')")
         con.commit()
-    if MIRROR is None:
-        logging.warning("Mirror not available. Falling back to legacy upstream request workflow.")
-        app.bot_data["worker"]=asyncio.create_task(worker(app))
+    if not mirrors:
+        logging.warning("No connected mirror yet. Mobile panel can add a Telegram account at any time.")
     panel=AdminPanel(app,__import__(__name__))
     panel.disabled_env=PANEL_DISABLED_ENV
     app.bot_data["panel"]=panel
