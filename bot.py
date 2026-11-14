@@ -64,6 +64,66 @@ def shop_admin_ids():
 
 SHOP=CustomerShop(db,balance,is_admin,shop_admin_ids,PRICE,SUPPORT)
 
+
+def current_price():
+    with closing(db()) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS bot_settings(k TEXT PRIMARY KEY,v TEXT NOT NULL)")
+        row=con.execute("SELECT v FROM bot_settings WHERE k='price_cents'").fetchone()
+    try:return max(1,int(row["v"])) if row else PRICE
+    except (ValueError,TypeError):return PRICE
+
+def price_label():
+    return "$"+format(current_price()/100,".2f")
+
+def recording_enabled(uid):
+    with closing(db()) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS admin_recording(uid INTEGER PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 0)")
+        row=con.execute("SELECT enabled FROM admin_recording WHERE uid=?",(uid,)).fetchone()
+    return bool(row and row["enabled"]) and is_admin(uid)
+
+def admin_panel_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("👑 Admin Panel",callback_data="admin_home")]])
+
+async def admin_command(u,c):
+    if not is_admin(u.effective_user.id):return
+    if recording_enabled(u.effective_user.id):
+        await u.effective_message.reply_text("🎥 Recording mode is active. Turn it off with /recording off.")
+        return
+    await u.effective_message.reply_text("👑 DigiVerify Admin Panel",reply_markup=admin_menu())
+
+async def recording_command(u,c):
+    uid=u.effective_user.id
+    if not is_admin(uid):return
+    choice=c.args[0].lower() if c.args else ""
+    if choice not in ("on","off"):
+        await u.effective_message.reply_text("Usage: /recording on or /recording off")
+        return
+    with closing(db()) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS admin_recording(uid INTEGER PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 0)")
+        con.execute("INSERT OR REPLACE INTO admin_recording(uid,enabled) VALUES(?,?)",(uid,int(choice=="on")))
+        con.commit()
+    await u.effective_message.reply_text("🎥 Customer-view recording mode "+("enabled" if choice=="on" else "disabled")+".",reply_markup=customer_menu(uid) if choice=="on" else admin_panel_keyboard())
+
+async def setprice_command(u,c):
+    if not is_admin(u.effective_user.id):return
+    if not c.args:
+        await u.effective_message.reply_text("💵 Current price: "+price_label()+" per successful verification.\nUsage: /setprice 2.50",reply_markup=admin_menu())
+        return
+    try:
+        from decimal import Decimal,InvalidOperation
+        value=Decimal(c.args[0])
+        cents=value*100
+        if not value.is_finite() or value<=0 or value>10000 or cents!=cents.to_integral_value():raise ValueError()
+        cents=int(cents)
+    except (ValueError,InvalidOperation):
+        await u.effective_message.reply_text("❌ Enter a valid USD price with up to 2 decimals, e.g. /setprice 2.50")
+        return
+    with closing(db()) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS bot_settings(k TEXT PRIMARY KEY,v TEXT NOT NULL)")
+        con.execute("INSERT OR REPLACE INTO bot_settings(k,v) VALUES('price_cents',?)",(str(cents),))
+        con.commit()
+    await u.effective_message.reply_text("✅ New verification price: "+price_label()+" (successful verifications only).",reply_markup=admin_menu())
+
 def guide_text():
     return f"""💬 HELP CENTER & USER GUIDE
 ━━━━━━━━━━━━━━━━━━
@@ -171,6 +231,7 @@ def admin_menu():
         [InlineKeyboardButton("📊 Live Dashboard",callback_data="admin_dashboard"),InlineKeyboardButton("🪞 Sessions",callback_data="admin_sessions")],
         [InlineKeyboardButton("📋 Orders",callback_data="admin_orders"),InlineKeyboardButton("💰 Top-ups",callback_data="admin_topups")],
         [InlineKeyboardButton("🛑 Cancel Order",callback_data="admin_cancel_help"),InlineKeyboardButton("👤 Add Admin",callback_data="admin_add_help")],
+        [InlineKeyboardButton("💵 Pricing",callback_data="admin_pricing"),InlineKeyboardButton("🎥 Recording Mode",callback_data="admin_recording")],
         [InlineKeyboardButton("⚙️ Admin Commands",callback_data="admin_commands"),InlineKeyboardButton("🏠 Customer Menu",callback_data="home")]
     ])
 
@@ -240,8 +301,7 @@ async def start(u,c):
 
 💳 DigiVerify Top Up charges only your DigiVerify wallet, never the original bot.""",
         reply_markup=customer_menu(uid),disable_web_page_preview=True)
-    if is_admin(uid):
-        await u.effective_message.reply_text("🛠 DIGIVERIFY ADMIN CONTROLS",reply_markup=admin_menu())
+
 
 async def wallet(u,c):
     if not await require_channel(u,c):return
@@ -305,8 +365,15 @@ async def callback(u,c):
     await q.answer()
     uid=q.from_user.id
     if action.startswith("admin_"):
+        if recording_enabled(uid) and action!="admin_recording":
+            await q.message.reply_text("🎥 Recording mode is enabled. Use /recording off to restore admin controls.")
+            return
         if not is_admin(uid):
             await q.message.reply_text("⛔ Admin access required.");return
+        if action=="admin_pricing":
+            await q.message.reply_text("💵 Current verification price: "+price_label()+"\nTo change it: /setprice 2.50",reply_markup=admin_menu());return
+        if action=="admin_recording":
+            await q.message.reply_text("🎥 Customer-view recording mode\nEnable: /recording on\nDisable: /recording off\nAdmin tools are hidden from /start while recording.",reply_markup=admin_menu());return
         if action=="admin_dashboard":
             return await panel_command(u,c)
         if action=="admin_sessions":
@@ -322,7 +389,7 @@ async def callback(u,c):
         else:msg="Unknown admin action."
         await q.message.reply_text(msg);return
     if action=="admin_home":
-        if is_admin(uid):await q.message.reply_text("🛠 Admin Control Center",reply_markup=admin_menu())
+        if is_admin(uid) and not recording_enabled(uid):await q.message.reply_text("🛠 Admin Control Center",reply_markup=admin_menu())
         return
     if action=="home":return await start(u,c)
     if action in ("topup","wallet"):return await SHOP.topup(u,c)
@@ -632,7 +699,7 @@ async def init(app):
             BotCommand("orders","Recent orders"),BotCommand("topups","Payment review"),
             BotCommand("cancel","Cancel order"),BotCommand("addadmin","Add administrator"),
             BotCommand("admins","List administrators"),BotCommand("credit","Credit wallet"),
-            BotCommand("setchannel","Required channel"),BotCommand("setpayment","Payment address")]
+            BotCommand("setchannel","Required channel"),BotCommand("setpayment","Payment address"),BotCommand("setprice","Verification price"),BotCommand("admin","Admin controls"),BotCommand("recording","Customer-view recording mode")]
         await app.bot.set_my_commands(public_commands,scope=BotCommandScopeAllPrivateChats())
         for admin_id in shop_admin_ids():
             try:
@@ -752,7 +819,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("setchannel",setchannel),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("topup",topup_command),("support",support_command),("setpayment",setpayment),("setgroup",setgroup),("setsupport",setsupport),("topups",topups_command),("approve",approve_command),("reject",reject_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
+    for command,handler in [("start",start),("admin",admin_command),("recording",recording_command),("setprice",setprice_command),("setchannel",setchannel),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("topup",topup_command),("support",support_command),("setpayment",setpayment),("setgroup",setgroup),("setsupport",setsupport),("topups",topups_command),("approve",approve_command),("reject",reject_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
