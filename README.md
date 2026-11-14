@@ -86,3 +86,36 @@ Keep the existing \`TG_SESSION_STRING\` for the original account. It is included
 Each account operates one independent upstream conversation at a time. The pool assigns an available account to each customer. When all accounts are busy, customers join a first-in-first-out queue; the bot notifies them when a session becomes available. An order is charged only on confirmed success. On completion or timeout the session is released and the next customer starts. A customer can release an idle session with \`/done\`. Administrators can inspect counts using \`/sessions\`.
 
 **Important:** Add session strings only in Railway Variables, never in Telegram chat or GitHub. Session strings grant account access. Restarting the service marks in-progress orders for review; a production-grade durable queue would require recovery across restarts.
+
+## DigiVerify Control: Installable phone admin app
+
+Dashboard: https://digiverify-production.up.railway.app/app
+
+This is a Progressive Web App (PWA), not a native APK. Android: open in Chrome and choose Install App / Add to Home Screen. iPhone: open in Safari, then Share > Add to Home Screen.
+
+### Secure admin login
+
+1. In @DigitopVerifyBot, send `/panel` from an admin account.
+2. Open the dashboard link and enter the one-time code from Telegram (10 minutes, one use).
+3. The dashboard uses an HttpOnly, Secure, SameSite cookie; logins expire after 12 hours or on service restart.
+
+### Features
+
+- Monitor each Telegram mirror: connected, in use, processing, offline, or disabled.
+- Read VIP turns, Free turns, reward points and last-updated timestamp from messages sent by the original @gemini_ver_bot. An unknown value displays a dash, never invented zero.
+- Near-live updates every 5 seconds, order statistics, FIFO queue, cancellations and per-account low balance thresholds.
+- Telegram admin alerts on low upstream credits, disconnects and reconnections even with the phone app closed.
+- Manage up to 10 authorized Telegram accounts, starting with a target of 5. New accounts can be added from the phone using a Telegram phone login code and optional 2FA password, or a StringSession from setup_session.py.
+- Remove idle accounts, disable/re-enable environment sessions, refresh balances without interrupting an active customer.
+- Add USD funds to a DigiVerify customer's own wallet from the finance screen.
+- Record a paid provider top-up as an accounting note. This does not add funds at the upstream provider; payment must be completed through the provider's actual payment flow.
+
+### Railway configuration
+
+- PORT=8080 (web server). Railway routes HTTPS to this port.
+- PANEL_URL=https://digiverify-production.up.railway.app/app
+- PANEL_ENCRYPTION_KEY (Fernet key, secret Railway variable, required for encrypted saved Telegram sessions). Back up the key securely; losing or rotating it makes previously saved sessions undecryptable.
+- MIRROR_TARGET=5 (dashboard target only; additional sessions need to be connected).
+- TG_API_ID, TG_API_HASH, TG_SESSION_STRING and optional TG_SESSION_STRINGS continue to work.
+
+Security: never commit Telegram sessions, 2FA codes, or login codes to GitHub. The public /health endpoint contains no account information.
