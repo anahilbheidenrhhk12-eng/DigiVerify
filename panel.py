@@ -39,6 +39,7 @@ def ensure_panel_tables(db):
           id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL,
           cents INTEGER NOT NULL, note TEXT NOT NULL, by_uid INTEGER NOT NULL,
           created INTEGER NOT NULL)""")
+        con.execute("CREATE TABLE IF NOT EXISTS provider_claims(txhash TEXT PRIMARY KEY,account_id INTEGER,status TEXT,message TEXT,created INTEGER)")
         con.commit()
 
 def _fernet():
@@ -134,6 +135,7 @@ class AdminPanel:
         self.server.router.add_post("/api/sessions/{aid}/refresh",self.refresh)
         self.server.router.add_post("/api/sessions/{aid}/threshold",self.threshold)
         self.server.router.add_post("/api/sessions/{aid}/topup-note",self.record_topup)
+        self.server.router.add_post("/api/sessions/{aid}/claim",self.claim_payment)
         self.server.router.add_delete("/api/sessions/{aid}",self.remove_session)
         self.server.router.add_post("/api/sessions/{aid}/enable",self.enable_session)
         self.server.router.add_post("/api/customers/credit",self.customer_credit)
@@ -637,6 +639,78 @@ class AdminPanel:
             con.commit()
         if not cur.rowcount: return web.json_response({"error":"Unknown account"},status=404)
         return web.json_response({"ok":True})
+
+
+    async def claim_payment(self,req):
+        aid=int(req.match_info["aid"])
+        data=await self._json(req)
+        tx=str(data.get("txhash","")).strip().lower()
+        if not re.fullmatch(r"0x[a-f0-9]{64}",tx):
+            return web.json_response({"error":"Invalid BEP20 TxHash (0x + 64 hex characters)"},status=400)
+        m=self._mirror(aid)
+        pool=self._pool()
+        if not m or not pool or not m.client.is_connected() or m.active_order is not None or m.owner is not None:
+            return web.json_response({"error":"Account must be connected and idle"},status=409)
+        with closing(self.botmod.db()) as con:
+            try:
+                con.execute("INSERT INTO provider_claims VALUES(?,?,?,?,?)",(tx,aid,"reserved","Not yet confirmed",int(time.time())))
+                con.commit()
+            except Exception:
+                return web.json_response({"error":"TxHash already registered; cannot submit twice"},status=409)
+        try:
+            async with m.lock:
+                if m.owner is not None or m.active_order is not None:
+                    raise RuntimeError("Account became busy")
+                m.mute_until=time.monotonic()+130
+                async def latest():
+                    return await m.client.get_messages(m.peer,limit=12)
+                async def button(parts):
+                    for msg in await latest():
+                        if msg.out: continue
+                        for i,line in enumerate(msg.buttons or []):
+                            for j,b in enumerate(line):
+                                if any(p in (getattr(b,"text","") or "").lower() for p in parts):
+                                    return msg,i,j
+                    raise RuntimeError("Expected provider button not found")
+                await m.client.send_message(m.peer,"/start")
+                await asyncio.sleep(3)
+                msg,i,j=await button(["top up","topup","buy credits"])
+                await msg.click(i,j)
+                await asyncio.sleep(3)
+                msg,i,j=await button(["binance pay","bep20"])
+                await msg.click(i,j)
+                await asyncio.sleep(3)
+                msg,i,j=await button(["enter txid","txhash","claim automatically"])
+                await msg.click(i,j)
+                await asyncio.sleep(2)
+                previous=await latest()
+                last_id=max((x.id for x in previous),default=0)
+                await m.client.send_message(m.peer,tx)
+                status="pending"
+                reply="Provider has not confirmed the transaction yet"
+                for _ in range(35):
+                    await asyncio.sleep(2)
+                    messages=[x for x in await latest() if not x.out and x.id>last_id]
+                    body="\n".join(x.raw_text or "" for x in messages)
+                    lower=body.lower()
+                    if "top-up successful" in lower or "top up successful" in lower:
+                        status="success";reply=body[:1500];break
+                    if any(x in lower for x in ["already claimed","already used","invalid transaction","transaction not found","top-up failed"]):
+                        status="failed";reply=body[:1500];break
+                with closing(self.botmod.db()) as con:
+                    con.execute("UPDATE provider_claims SET status=?,message=? WHERE txhash=?",(status,reply,tx))
+                    con.commit()
+                if status=="success":
+                    await self._notify("✅ BEP20 top-up confirmed for "+m.label)
+                return web.json_response({"ok":True,"status":status,"message":reply})
+        except Exception:
+            LOG.exception("Upstream claim not confirmed")
+            with closing(self.botmod.db()) as con:
+                con.execute("UPDATE provider_claims SET status='review',message='Check provider chat manually' WHERE txhash=?",(tx,))
+                con.commit()
+            return web.json_response({"error":"Not confirmed. Check original bot before proceeding. TxHash reserved against duplicate use.", "status":"review"},status=409)
+        finally:
+            m.mute_until=time.monotonic()+15
 
     async def record_topup(self,req):
         aid=int(req.match_info["aid"])
