@@ -107,12 +107,12 @@ function card(s){
  html+='<div class="row"><span>حد التنبيه</span><b>'+s.threshold+'</b></div>';
  if(s.error)html+='<div class="notice error">⚠️ '+safe(s.error)+'</div>';
  if(s.low)html+='<div class="notice">🚨 الرصيد اقترب من النفاد، يجب شحن حساب المزود.</div>';
- html+='<div class="buttons"><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄 تحديث</button><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 تنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل شحن</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button></div>';
+ html+='<div class="buttons"><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄 تحديث</button><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 تنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل شحن</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button>'+(s.status==="disabled"&&s.source==="env"?'<button class="btn primary" data-action="enable" data-id="'+s.id+'">▶️ إعادة تفعيل</button>':'')+'</div>';
  html+='<p class="note">الأرصدة مأخوذة من رسائل البوت الأصلي فقط، وليست تقديراً من اللوحة.</p></div>';return html;
 }
 function sessions(){
  var html=headline("🪞 إدارة حسابات Telegram",S.active+" / "+S.max);
- html+='<div class="buttons" style="margin-bottom:15px"><button class="btn primary" data-action="add">➕ إضافة حساب</button><button class="btn" data-action="reload">🔄 تحديث</button></div><div class="session-grid">';
+ html+='<div class="buttons" style="margin-bottom:15px"><button class="btn primary" data-action="addphone">📱 إضافة رقم Telegram</button><button class="btn" data-action="add">🔐 إضافة Session String</button><button class="btn" data-action="reload">🔄 تحديث</button></div><div class="session-grid">';
  S.sessions.forEach(function(s){html+=card(s)});
  html+='</div>';
  if(!S.sessions.length)html+='<div class="card"><p class="note">أضف حساباً باستخدام StringSession الذي تولده محلياً عبر setup_session.py.</p></div>';
@@ -140,6 +140,16 @@ function settings(){
 }
 function render(){document.querySelectorAll(".nav").forEach(function(e){e.classList.toggle("active",e.dataset.tab===tab)});$("body").innerHTML=({home:home,sessions:sessions,queue:queue,finance:finance,settings:settings}[tab]||home)()}
 function alertIfNeeded(){S.sessions.forEach(function(s){if(s.low&&!lowCache[s.id]){toast("🚨 رصيد منخفض: "+s.label,true);if("Notification" in window&&Notification.permission==="granted")new Notification("DigiVerify",{body:s.label+" · "+s.total+" remaining"})}lowCache[s.id]=s.low})}
+function phonePrompt(ticket,needsPassword){
+ var fields=needsPassword?
+    [{label:"كلمة مرور Telegram للتحقق بخطوتين",name:"password",type:"password",required:true}]:
+    [{label:"رمز تسجيل الدخول الذي أرسله Telegram",name:"code",placeholder:"12345",required:true}];
+ modal(needsPassword?"🔐 Telegram 2FA Password":"📩 كود الدخول",fields,async function(d){
+   var r=await api("/api/phone/verify","POST",Object.assign({ticket:ticket},d));
+   if(r.needs_password){setTimeout(function(){phonePrompt(ticket,true)},200);return "يلزم رمز التحقق بخطوتين";}
+   return "✅ أضيف الحساب "+r.label+" وأصبح ضمن المرايا.";
+ });
+}
 function modal(title,inputs,callback){
  var html='<div class="modal-bg"><div class="modal"><div class="row"><h3>'+title+'</h3><button class="btn" data-action="close">✕</button></div><form id="modalform">';
  inputs.forEach(function(f){html+='<label>'+f.label+'</label>';if(f.textarea)html+='<textarea name="'+f.name+'" placeholder="'+safe(f.placeholder||"")+'" required></textarea>';else html+='<input name="'+f.name+'" type="'+(f.type||"text")+'" value="'+safe(f.value||"")+'" placeholder="'+safe(f.placeholder||"")+'" '+(f.required?"required":"")+' '+(f.step?'step="'+f.step+'"':"")+' '+(f.min!==undefined?'min="'+f.min+'"':"")+'>'});
@@ -148,11 +158,13 @@ function modal(title,inputs,callback){
 }
 async function action(name,id){
  var s=S&&S.sessions.find(function(x){return String(x.id)===String(id)});
+ if(name==="addphone"){return modal("📱 إضافة رقم Telegram",[{label:"اسم الحساب",name:"label",placeholder:"Mirror 2",required:true},{label:"رقم الهاتف مع رمز الدولة",name:"phone",placeholder:"+216XXXXXXXX",required:true}],async function(d){var r=await api("/api/phone/start","POST",d);setTimeout(function(){phonePrompt(r.ticket,false)},200);return "تم إرسال كود تسجيل الدخول إلى Telegram"})}
  if(name==="add"){return modal("➕ إضافة Telegram Session",[{label:"اسم الحساب",name:"label",required:true,placeholder:"Mirror 2"},{label:"Telegram StringSession (سري)",name:"session",textarea:true}],async function(d){await api("/api/sessions","POST",d);return "✅ تم توصيل الحساب"})}
  if(name==="refresh"){var r=await api("/api/sessions/"+id+"/refresh","POST",{});toast(r.message);return}
  if(name==="reload"){await fetchState();return}
  if(name==="limit"){return modal("حد تنبيه "+safe(s.label),[{label:"التنبيه عند هذا الرصيد",name:"threshold",type:"number",min:0,value:s.threshold,required:true}],async function(d){await api("/api/sessions/"+id+"/threshold","POST",{threshold:Number(d.threshold)});return "تم تعديل حد التنبيه"})}
  if(name==="topup"){return modal("تسجيل شحن "+safe(s.label),[{label:"المبلغ المدفوع للمزود (USD)",name:"amount",type:"number",step:"0.01",min:"0.01",required:true},{label:"ملاحظة أو رقم العملية",name:"note",placeholder:"Payment reference"}],async function(d){var r=await api("/api/sessions/"+id+"/topup-note","POST",d);return r.notice})}
+ if(name==="enable"){await api("/api/sessions/"+id+"/enable","POST",{});toast("✅ تم إعادة الاتصال");await fetchState();return}
  if(name==="remove"){if(!confirm("إزالة حساب "+s.label+"؟"))return;await api("/api/sessions/"+id,"DELETE",{});toast("تمت الإزالة");await fetchState();return}
  if(name==="cancel"){if(!confirm("إلغاء الطلب #"+id+"؟"))return;await api("/api/orders/"+id+"/cancel","POST",{});toast("تم الإلغاء");await fetchState();return}
  if(name==="close"){$("modal").innerHTML="";return}
