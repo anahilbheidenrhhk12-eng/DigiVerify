@@ -301,7 +301,7 @@ async def intake(u,c):
             with closing(db()) as con:
                 con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
                 con.commit()
-            await u.message.reply_text(f"📨 Request #{oid} sent to the ORIGINAL bot. Your verification result will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. Verification results will appear here. Free admin test.")
+            await u.message.reply_text(f"📨 Request #{oid} sent to DigiVerify processing. Your verification result will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. Verification results will appear here. Free admin test.")
         else:
             await u.message.reply_text(f"⏳ Request #{oid} queued. Your position: #{MIRROR.position(uid)}. It will start automatically when a mirror becomes free. No charge while waiting.")
         return
