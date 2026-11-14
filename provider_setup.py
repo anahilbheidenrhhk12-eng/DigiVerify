@@ -5,6 +5,7 @@ that cannot complete setup is kept out of the customer allocation pool.
 """
 import asyncio
 import logging
+import os
 import re
 from urllib.parse import urlparse
 from telethon.tl.functions.channels import JoinChannelRequest
@@ -53,6 +54,8 @@ async def setup_provider_account(client,provider):
         for _,button in _buttons([msg]):
             url=getattr(button,"url",None)
             if url and GROUP_LINK.fullmatch(url):group_links.append(url)
+    configured=os.getenv('PROVIDER_GROUP_LINK','').strip()
+    if configured and GROUP_LINK.fullmatch(configured):group_links.insert(0,configured)
     # Provider may be ready without a mandatory group; do not force an unknown join.
     if not group_links and _has_ready_message(messages):
         return True,"Provider ready; English menu detected (no group join prompt)"
