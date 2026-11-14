@@ -250,7 +250,7 @@ class AdminPanel:
         vip,free,credits=row["vip"],row["free"],row["credits"]
         total=(vip or 0)+(free or 0) if vip is not None or free is not None else credits
         busy=bool(mirror and mirror.active_order is not None)
-        online=bool(mirror and mirror.client.is_connected())
+        online=bool(mirror and getattr(mirror,"healthy",True) and mirror.client.is_connected())
         status="disabled" if not row["enabled"] else ("offline" if not online else ("processing" if busy else ("in-use" if mirror.owner else "online")))
         phone=getattr(mirror,"phone_masked",None) if mirror else None
         threshold=int(row["low_threshold"])
@@ -378,23 +378,27 @@ class AdminPanel:
             if not pool: continue
             for m in list(pool.mirrors):
                 try:
+                    was_online=getattr(m,"healthy",True) and m.client.is_connected()
                     if not m.client.is_connected():
                         await m.client.connect()
-                        if not await m.client.is_user_authorized():
-                            raise RuntimeError("Session expired or login revoked")
-                        LOG.warning("Mirror %s reconnected",m.account_id)
-                        await self._notify(f"✅ DigiVerify mirror reconnected: {m.label}")
+                    if not await m.client.is_user_authorized():
+                        raise RuntimeError("Session expired or Telegram authorization revoked")
+                    m.healthy=True
+                    row=self._row(m.account_id)
+                    if (not was_online) or (row and row["last_error"]):
                         with closing(self.botmod.db()) as con:
                             con.execute("UPDATE session_registry SET last_error=NULL WHERE account_id=?",(m.account_id,))
                             con.commit()
+                        await self._notify(f"✅ DigiVerify mirror is online again: {m.label}")
                 except Exception as exc:
+                    m.healthy=False
                     err=type(exc).__name__+": "+str(exc)[:120]
                     row=self._row(m.account_id)
                     with closing(self.botmod.db()) as con:
                         con.execute("UPDATE session_registry SET last_error=? WHERE account_id=?",(err,m.account_id))
                         con.commit()
                     if row and row["last_error"]!=err:
-                        await self._notify(f"🔴 DigiVerify mirror disconnected: {m.label}\n{err}")
+                        await self._notify(f"🔴 DigiVerify mirror unavailable: {m.label}\n{err}")
 
     async def _attach_session(self,session,label,source="panel"):
         """Authorize and register a session on the live pool (never expose secrets)."""
