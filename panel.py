@@ -266,11 +266,13 @@ class AdminPanel:
         total=(vip or 0)+(free or 0) if vip is not None or free is not None else credits
         busy=bool(mirror and mirror.active_order is not None)
         online=bool(mirror and getattr(mirror,"healthy",True) and mirror.client.is_connected())
-        status="disabled" if not row["enabled"] else ("offline" if not online else ("processing" if busy else ("in-use" if mirror.owner else "online")))
+        setup_state=getattr(mirror,"setup_state","ready") if mirror else "unknown"
+        status="disabled" if not row["enabled"] else ("setup_failed" if setup_state=="setup_failed" else ("offline" if not online else ("processing" if busy else ("in-use" if mirror.owner else "online"))))
         phone=getattr(mirror,"phone_masked",None) if mirror else None
         threshold=int(row["low_threshold"])
         return {"id":aid,"label":row["label"],"source":row["source"],
                 "status":status,"online":online,"phone":phone,
+                "setup_state":setup_state,"setup_message":getattr(mirror,"setup_message","") if mirror else "",
                 "vip":vip,"free":free,"credits":credits,"points":row["points"],"total":total,
                 "threshold":threshold,"low":bool(total is not None and total<=threshold),
                 "observed_at":row["observed_at"],"last_seen":row["last_seen"],
@@ -398,6 +400,12 @@ class AdminPanel:
                         await m.client.connect()
                     if not await m.client.is_user_authorized():
                         raise RuntimeError("Session expired or Telegram authorization revoked")
+                    if getattr(m,"setup_state","ready")=="setup_failed":
+                        from provider_setup import setup_provider_account
+                        ready,reason=await setup_provider_account(m.client,self.botmod.PROVIDER)
+                        m.setup_state="ready" if ready else "setup_failed"
+                        m.setup_message=reason
+                        if not ready:raise RuntimeError("SETUP FAILED: "+reason)
                     m.healthy=True
                     row=self._row(m.account_id)
                     if (not was_online) or (row and row["last_error"]):
@@ -444,6 +452,11 @@ class AdminPanel:
             mirror.phone_masked=("••••"+str(account.phone)[-4:]) if getattr(account,"phone",None) else None
             mirror.label=label
             mirror.source=source
+            from provider_setup import setup_provider_account
+            ready,setup_message=await setup_provider_account(client,self.botmod.PROVIDER)
+            mirror.setup_state="ready" if ready else "setup_failed"
+            mirror.setup_message=setup_message
+            mirror.healthy=bool(ready)
             await mirror.start()
             async with pool.lock:
                 if len(pool.mirrors)>=MAX_MIRRORS:
@@ -464,6 +477,11 @@ class AdminPanel:
                              (aid,label,"env",int(time.time())))
                     con.commit()
                 pool.mirrors.append(mirror)
+                if not ready:
+                    with closing(self.botmod.db()) as con:
+                        con.execute("UPDATE session_registry SET last_error=? WHERE account_id=?",
+                                    ("SETUP FAILED: "+setup_message,aid))
+                        con.commit()
                 mirror.on_terminal=pool.on_finished
                 mirror.observed_callback=self.observe
                 self.app.bot_data.setdefault("mirror_clients",[]).append(client)
