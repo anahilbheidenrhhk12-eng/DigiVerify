@@ -7,6 +7,7 @@ import asyncio
 from contextlib import closing
 from decimal import Decimal, InvalidOperation
 import json
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -22,7 +23,7 @@ from telethon.errors import SessionPasswordNeededError
 
 BASE=Path(__file__).resolve().parent
 LOG=logging.getLogger("digiverify.panel")
-TTL=12*3600
+TTL=365*24*3600
 CODE_TTL=600
 MAX_MIRRORS=10
 
@@ -39,6 +40,7 @@ def ensure_panel_tables(db):
           id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL,
           cents INTEGER NOT NULL, note TEXT NOT NULL, by_uid INTEGER NOT NULL,
           created INTEGER NOT NULL)""")
+        con.execute("CREATE TABLE IF NOT EXISTS admin_devices(token_hash TEXT PRIMARY KEY,admin_uid INTEGER NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL,created INTEGER NOT NULL,last_seen INTEGER NOT NULL)")
         con.execute("CREATE TABLE IF NOT EXISTS provider_claims(txhash TEXT PRIMARY KEY,account_id INTEGER,status TEXT,message TEXT,created INTEGER)")
         con.commit()
 
@@ -145,15 +147,21 @@ class AdminPanel:
     async def _security(self,req,handler):
         if req.path.startswith("/api/") and req.path!="/api/login":
             token=req.cookies.get("dv_admin")
-            value=self.sessions.get(token)
-            if not value or value[1]<time.monotonic() or not self.botmod.is_admin(value[0]):
-                if token: self.sessions.pop(token,None)
+            digest=hashlib.sha256((token or "").encode()).hexdigest()
+            with closing(self.botmod.db()) as con:
+                value=con.execute("SELECT admin_uid,csrf,expires FROM admin_devices WHERE token_hash=?",(digest,)).fetchone()
+            if not value or value["expires"]<int(time.time()) or not self.botmod.is_admin(value["admin_uid"]):
                 return web.json_response({"error":"Sign in again via /panel in Telegram."},status=401)
-            req["admin_uid"]=value[0]
+            req["admin_uid"]=value["admin_uid"]
+            req["csrf"]=value["csrf"]
             if req.method not in ("GET","HEAD"):
                 supplied=req.headers.get("X-DigiVerify-CSRF","")
-                if not secrets.compare_digest(supplied,value[2]):
+                if not secrets.compare_digest(supplied,value["csrf"]):
                     return web.json_response({"error":"Invalid security token"},status=403)
+            if req.path=="/api/state":
+                with closing(self.botmod.db()) as con:
+                    con.execute("UPDATE admin_devices SET last_seen=? WHERE token_hash=?",(int(time.time()),digest))
+                    con.commit()
         response=await handler(req)
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["X-Frame-Options"]="DENY"
@@ -204,13 +212,18 @@ class AdminPanel:
             return web.json_response({"error":"Code invalid or expired. Send /panel to your bot."},status=401)
         token=secrets.token_urlsafe(32)
         csrf=secrets.token_urlsafe(24)
-        self.sessions[token]=(entry[0],now+TTL,csrf)
+        with closing(self.botmod.db()) as con:
+            con.execute("INSERT INTO admin_devices VALUES(?,?,?,?,?,?)",(hashlib.sha256(token.encode()).hexdigest(),entry[0],csrf,int(time.time())+TTL,int(time.time()),int(time.time())))
+            con.commit()
         response=web.json_response({"ok":True,"csrf":csrf})
         response.set_cookie("dv_admin",token,max_age=TTL,httponly=True,secure=True,samesite="Strict",path="/")
         return response
 
     async def logout(self,req):
-        self.sessions.pop(req.cookies.get("dv_admin"),None)
+        digest=hashlib.sha256((req.cookies.get("dv_admin") or "").encode()).hexdigest()
+        with closing(self.botmod.db()) as con:
+            con.execute("DELETE FROM admin_devices WHERE token_hash=?",(digest,))
+            con.commit()
         response=web.json_response({"ok":True})
         response.del_cookie("dv_admin",path="/")
         return response
@@ -275,7 +288,7 @@ class AdminPanel:
         queue=[{"position":i+1,"uid":uid,"order":p.queued_orders.get(uid,[None])[0]} for i,uid in enumerate(p.waiting)] if p else []
         token=req.cookies.get("dv_admin")
         return web.json_response({
-            "csrf":self.sessions[token][2],
+            "csrf":req["csrf"],
             "admin":req["admin_uid"],
             "target":int(os.getenv("MIRROR_TARGET","5")),
             "max":MAX_MIRRORS,
