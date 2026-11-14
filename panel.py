@@ -1,0 +1,569 @@
+"""Secure, installable mobile operations dashboard for DigiVerify.
+
+The dashboard never returns Telegram StringSessions or API secrets to browsers.
+Telegram admins obtain a short-lived one-time login code from /panel.
+"""
+import asyncio
+from contextlib import closing
+from decimal import Decimal, InvalidOperation
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import secrets
+import time
+
+from aiohttp import web
+from cryptography.fernet import Fernet, InvalidToken
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+
+BASE=Path(__file__).resolve().parent
+LOG=logging.getLogger("digiverify.panel")
+TTL=12*3600
+CODE_TTL=600
+MAX_MIRRORS=10
+
+def ensure_panel_tables(db):
+    with closing(db()) as con:
+        con.execute("""CREATE TABLE IF NOT EXISTS session_registry(
+          account_id INTEGER PRIMARY KEY, label TEXT NOT NULL,
+          source TEXT NOT NULL, secret TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+          vip INTEGER, free INTEGER, credits INTEGER, points INTEGER,
+          observed_at INTEGER, last_seen INTEGER, last_error TEXT,
+          low_threshold INTEGER NOT NULL DEFAULT 2, last_alert INTEGER NOT NULL DEFAULT 0,
+          topup_recorded_cents INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)""")
+        con.execute("""CREATE TABLE IF NOT EXISTS session_topup_notes(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL,
+          cents INTEGER NOT NULL, note TEXT NOT NULL, by_uid INTEGER NOT NULL,
+          created INTEGER NOT NULL)""")
+        con.commit()
+
+def _fernet():
+    key=os.getenv("PANEL_ENCRYPTION_KEY","").strip()
+    if not key:
+        raise RuntimeError("PANEL_ENCRYPTION_KEY is required to store added accounts")
+    try:
+        return Fernet(key.encode("ascii"))
+    except (ValueError,TypeError) as exc:
+        raise RuntimeError("PANEL_ENCRYPTION_KEY must be a Fernet key") from exc
+
+def load_saved_sessions(db):
+    ensure_panel_tables(db)
+    try: cipher=_fernet()
+    except RuntimeError:
+        return []
+    with closing(db()) as con:
+        rows=con.execute("SELECT account_id,label,secret FROM session_registry WHERE source='panel' AND enabled=1 AND secret IS NOT NULL").fetchall()
+    out=[]
+    for row in rows:
+        try:
+            value=cipher.decrypt(row["secret"].encode("ascii")).decode("utf-8")
+            out.append((value,str(row["label"]),int(row["account_id"])))
+        except (InvalidToken,UnicodeError):
+            LOG.error("Stored session %s could not be decrypted",row["account_id"])
+    return out
+
+def is_disabled(db,account_id):
+    ensure_panel_tables(db)
+    with closing(db()) as con:
+        r=con.execute("SELECT enabled FROM session_registry WHERE account_id=?",(account_id,)).fetchone()
+        return bool(r is not None and not r["enabled"])
+
+def parse_credits(text):
+    """Parse absolute wallet counters only; ignore top-up change notifications."""
+    t=(text or "").replace("\u200b","")
+    regex={
+      "vip":[
+        r"VIP\s+Priority\s+Turns?\s*:\s*(\d+)",
+        r"(?:Remaining|Current\s+Balance)\s*:\s*[^\n]*?(\d+)\s*VIP\b",
+      ],
+      "free":[
+        r"Free\s*/\s*Standard\s+Turns?\s*:\s*(\d+)",
+        r"(?:Remaining|Current\s+Balance)\s*:\s*[^\n]*?(\d+)\s*Free\b",
+      ],
+      "points":[
+        r"Reward\s+Points?\s*:\s*(\d+)",
+        r"Points?\s*:\s*(\d+)\s*(?:pts|points)\b"
+      ],
+      "credits":[r"Your\s+Balance\s*:\s*(\d+)\s*verifications?\b"]
+    }
+    data={}
+    for key,patterns in regex.items():
+        for p in patterns:
+            m=re.search(p,t,re.I)
+            if m:
+                data[key]=int(m.group(1))
+                break
+    return data
+
+class AdminPanel:
+    def __init__(self,app,bot_module):
+        self.app=app
+        self.botmod=bot_module
+        self.codes={}
+        self.sessions={}
+        self.failed={}
+        self.runner=None
+        self.site=None
+        self.task=None
+        self.refresh_at={}
+        self.disabled_env={}
+        self.server=web.Application(client_max_size=65536,middlewares=[self._security])
+        self._routes()
+
+    def _routes(self):
+        self.server.router.add_get("/",self.index)
+        self.server.router.add_get("/app",self.index)
+        self.server.router.add_get("/manifest.webmanifest",self.manifest)
+        self.server.router.add_get("/sw.js",self.worker_script)
+        self.server.router.add_get("/icon.svg",self.icon)
+        self.server.router.add_get("/health",self.health)
+        self.server.router.add_post("/api/login",self.login)
+        self.server.router.add_get("/api/state",self.state)
+        self.server.router.add_post("/api/logout",self.logout)
+        self.server.router.add_post("/api/sessions",self.add_session)
+        self.server.router.add_post("/api/sessions/{aid}/refresh",self.refresh)
+        self.server.router.add_post("/api/sessions/{aid}/threshold",self.threshold)
+        self.server.router.add_post("/api/sessions/{aid}/topup-note",self.record_topup)
+        self.server.router.add_delete("/api/sessions/{aid}",self.remove_session)
+        self.server.router.add_post("/api/sessions/{aid}/enable",self.enable_session)
+        self.server.router.add_post("/api/customers/credit",self.customer_credit)
+        self.server.router.add_post("/api/orders/{oid}/cancel",self.cancel_order)
+
+    @web.middleware
+    async def _security(self,req,handler):
+        if req.path.startswith("/api/") and req.path!="/api/login":
+            token=req.cookies.get("dv_admin")
+            value=self.sessions.get(token)
+            if not value or value[1]<time.monotonic() or not self.botmod.is_admin(value[0]):
+                if token: self.sessions.pop(token,None)
+                return web.json_response({"error":"Sign in again via /panel in Telegram."},status=401)
+            req["admin_uid"]=value[0]
+            if req.method not in ("GET","HEAD"):
+                supplied=req.headers.get("X-DigiVerify-CSRF","")
+                if not secrets.compare_digest(supplied,value[2]):
+                    return web.json_response({"error":"Invalid security token"},status=403)
+        response=await handler(req)
+        response.headers["X-Content-Type-Options"]="nosniff"
+        response.headers["X-Frame-Options"]="DENY"
+        response.headers["Referrer-Policy"]="no-referrer"
+        response.headers["Cache-Control"]="no-store"
+        return response
+
+    def issue_code(self,admin):
+        if not self.botmod.is_admin(admin): return None
+        code=secrets.token_urlsafe(20)
+        self.codes[code]=(admin,time.monotonic()+CODE_TTL)
+        return code
+
+    async def index(self,req):
+        return web.FileResponse(BASE/"admin.html",headers={"Cache-Control":"no-store"})
+
+    async def manifest(self,req):
+        return web.FileResponse(BASE/"manifest.webmanifest",headers={"Content-Type":"application/manifest+json"})
+
+    async def worker_script(self,req):
+        return web.FileResponse(BASE/"sw.js",headers={"Content-Type":"application/javascript"})
+
+    async def icon(self,req):
+        return web.FileResponse(BASE/"icon.svg",headers={"Content-Type":"image/svg+xml"})
+
+    async def health(self,req):
+        return web.json_response({"service":"DigiVerify Admin","status":"ok"})
+
+    async def login(self,req):
+        address=req.remote or "unknown"
+        now=time.monotonic()
+        strikes=[t for t in self.failed.get(address,[]) if now-t<600]
+        if len(strikes)>=12:
+            return web.json_response({"error":"Too many attempts. Retry later."},status=429)
+        try:
+            data=await req.json()
+            code=str(data.get("code","")).strip()
+        except (ValueError,TypeError):
+            code=""
+        entry=self.codes.pop(code,None)
+        if not entry or entry[1]<now or not self.botmod.is_admin(entry[0]):
+            strikes.append(now)
+            self.failed[address]=strikes
+            return web.json_response({"error":"Code invalid or expired. Send /panel to your bot."},status=401)
+        token=secrets.token_urlsafe(32)
+        csrf=secrets.token_urlsafe(24)
+        self.sessions[token]=(entry[0],now+TTL,csrf)
+        response=web.json_response({"ok":True,"csrf":csrf})
+        response.set_cookie("dv_admin",token,max_age=TTL,httponly=True,secure=True,samesite="Strict",path="/")
+        return response
+
+    async def logout(self,req):
+        self.sessions.pop(req.cookies.get("dv_admin"),None)
+        response=web.json_response({"ok":True})
+        response.del_cookie("dv_admin",path="/")
+        return response
+
+    async def _json(self,req):
+        try:
+            data=await req.json()
+            if not isinstance(data,dict):
+                raise ValueError("Expected a JSON object")
+            return data
+        except (ValueError,TypeError) as e:
+            raise web.HTTPBadRequest(text="Invalid JSON input") from e
+
+    def _pool(self):
+        return self.botmod.MIRROR
+
+    def _mirror(self,aid):
+        p=self._pool()
+        if not p: return None
+        return next((m for m in p.mirrors if getattr(m,"account_id",None)==aid),None)
+
+    def _row(self,aid):
+        with closing(self.botmod.db()) as con:
+            return con.execute("SELECT * FROM session_registry WHERE account_id=?",(aid,)).fetchone()
+
+    def upsert_mirror(self,mirror,label=None,source="env"):
+        aid=int(mirror.account_id)
+        with closing(self.botmod.db()) as con:
+            con.execute("""INSERT INTO session_registry(account_id,label,source,enabled,updated_at)
+              VALUES(?,?,?,?,?)
+              ON CONFLICT(account_id) DO UPDATE SET
+                label=CASE WHEN session_registry.label='' THEN excluded.label ELSE session_registry.label END,
+                enabled=1,updated_at=excluded.updated_at""",
+                (aid,label or ("Account "+str(aid)),source,1,int(time.time())))
+            con.commit()
+
+    def _summary(self,mirror,row):
+        aid=int(row["account_id"])
+        vip,free,credits=row["vip"],row["free"],row["credits"]
+        total=(vip or 0)+(free or 0) if vip is not None or free is not None else credits
+        busy=bool(mirror and mirror.active_order is not None)
+        online=bool(mirror and mirror.client.is_connected())
+        status="disabled" if not row["enabled"] else ("offline" if not online else ("processing" if busy else ("in-use" if mirror.owner else "online")))
+        phone=getattr(mirror,"phone_masked",None) if mirror else None
+        threshold=int(row["low_threshold"])
+        return {"id":aid,"label":row["label"],"source":row["source"],
+                "status":status,"online":online,"phone":phone,
+                "vip":vip,"free":free,"credits":credits,"points":row["points"],"total":total,
+                "threshold":threshold,"low":bool(total is not None and total<=threshold),
+                "observed_at":row["observed_at"],"last_seen":row["last_seen"],
+                "error":row["last_error"],"active_order":mirror.active_order if mirror else None,
+                "customer":mirror.owner if mirror else None,"topup_recorded_cents":row["topup_recorded_cents"]}
+
+    async def state(self,req):
+        p=self._pool()
+        mirrors={int(m.account_id):m for m in p.mirrors} if p else {}
+        with closing(self.botmod.db()) as con:
+            rows=con.execute("SELECT * FROM session_registry ORDER BY label,account_id").fetchall()
+            orders=con.execute("SELECT id,uid,status,created FROM orders ORDER BY id DESC LIMIT 30").fetchall()
+            stats={r["status"]:r["n"] for r in con.execute("SELECT status,COUNT(*) n FROM orders GROUP BY status")}
+        items=[self._summary(mirrors.get(int(r["account_id"])),r) for r in rows]
+        queue=[{"position":i+1,"uid":uid,"order":p.queued_orders.get(uid,[None])[0]} for i,uid in enumerate(p.waiting)] if p else []
+        token=req.cookies.get("dv_admin")
+        return web.json_response({
+            "csrf":self.sessions[token][2],
+            "admin":req["admin_uid"],
+            "target":int(os.getenv("MIRROR_TARGET","5")),
+            "max":MAX_MIRRORS,
+            "active":len(mirrors),
+            "sessions":items,"queue":queue,
+            "orders":[dict(r) for r in orders],
+            "order_stats":stats,"time":int(time.time())
+        })
+
+    async def start(self):
+        ensure_panel_tables(self.botmod.db)
+        self.runner=web.AppRunner(self.server,access_log=None)
+        await self.runner.setup()
+        port=int(os.getenv("PORT","8080"))
+        self.site=web.TCPSite(self.runner,host="0.0.0.0",port=port)
+        await self.site.start()
+        self.task=asyncio.create_task(self._health_loop())
+        LOG.warning("Admin PWA server listening on port %s",port)
+        pool=self._pool()
+        if pool:
+            for mirror in pool.mirrors:
+                self.upsert_mirror(mirror,getattr(mirror,"label",None),getattr(mirror,"source","env"))
+                mirror.observed_callback=self.observe
+            # Obtain a fresh readout from upstream, but only if idle.
+            asyncio.create_task(self._initial_refresh())
+
+    async def stop(self):
+        if self.task:
+            self.task.cancel()
+            try: await self.task
+            except asyncio.CancelledError: pass
+        if self.runner: await self.runner.cleanup()
+
+    async def _initial_refresh(self):
+        await asyncio.sleep(2)
+        pool=self._pool()
+        if not pool: return
+        for m in list(pool.mirrors):
+            if m.active_order is None and m.owner is None:
+                try: await m.client.send_message(m.peer,"/start")
+                except Exception:
+                    LOG.exception("Initial wallet refresh failed for account %s",m.account_id)
+                await asyncio.sleep(1)
+
+    async def _admins(self):
+        ids=set(self.botmod.ADMINS)
+        with closing(self.botmod.db()) as con:
+            ids.update(r["uid"] for r in con.execute("SELECT uid FROM extra_admins"))
+        return ids
+
+    async def _notify(self,body):
+        for uid in await self._admins():
+            try: await self.app.bot.send_message(uid,body)
+            except Exception:
+                LOG.warning("Cannot notify admin %s",uid)
+
+    async def observe(self,mirror,msg):
+        data=parse_credits(msg.raw_text or "")
+        now=int(time.time())
+        aid=int(mirror.account_id)
+        previous=self._row(aid)
+        if not previous:
+            self.upsert_mirror(mirror,mirror.label,mirror.source)
+            previous=self._row(aid)
+        fields={"last_seen":now}
+        if data:
+            fields["observed_at"]=now
+            fields.update(data)
+        with closing(self.botmod.db()) as con:
+            sets=", ".join(k+"=?" for k in fields)
+            con.execute("UPDATE session_registry SET "+sets+" WHERE account_id=?",(*fields.values(),aid))
+            con.commit()
+        if not data:return
+        latest=self._row(aid)
+        total=(latest["vip"] or 0)+(latest["free"] or 0) if latest["vip"] is not None or latest["free"] is not None else latest["credits"]
+        if total is None:return
+        threshold=int(latest["low_threshold"])
+        if total<=threshold and now-int(latest["last_alert"] or 0)>3600:
+            with closing(self.botmod.db()) as con:
+                con.execute("UPDATE session_registry SET last_alert=? WHERE account_id=?",(now,aid))
+                con.commit()
+            await self._notify(f"🚨 DIGIVERIFY: LOW UPSTREAM BALANCE\n🪞 {mirror.label}\n💎 VIP: {latest['vip'] if latest['vip'] is not None else '?'} | 🎁 Free: {latest['free'] if latest['free'] is not None else '?'}\nRemaining total: {total}\nThreshold: {threshold}\nTop up the ORIGINAL provider account before running out.")
+        elif total>threshold and previous and previous["last_alert"]:
+            with closing(self.botmod.db()) as con:
+                con.execute("UPDATE session_registry SET last_alert=0 WHERE account_id=?",(aid,))
+                con.commit()
+
+    async def _health_loop(self):
+        while True:
+            await asyncio.sleep(30)
+            pool=self._pool()
+            if not pool: continue
+            for m in list(pool.mirrors):
+                try:
+                    if not m.client.is_connected():
+                        await m.client.connect()
+                        if not await m.client.is_user_authorized():
+                            raise RuntimeError("Session expired or login revoked")
+                        LOG.warning("Mirror %s reconnected",m.account_id)
+                        await self._notify(f"✅ DigiVerify mirror reconnected: {m.label}")
+                        with closing(self.botmod.db()) as con:
+                            con.execute("UPDATE session_registry SET last_error=NULL WHERE account_id=?",(m.account_id,))
+                            con.commit()
+                except Exception as exc:
+                    err=type(exc).__name__+": "+str(exc)[:120]
+                    row=self._row(m.account_id)
+                    with closing(self.botmod.db()) as con:
+                        con.execute("UPDATE session_registry SET last_error=? WHERE account_id=?",(err,m.account_id))
+                        con.commit()
+                    if row and row["last_error"]!=err:
+                        await self._notify(f"🔴 DigiVerify mirror disconnected: {m.label}\n{err}")
+
+    async def add_session(self,req):
+        data=await self._json(req)
+        session=str(data.get("session","")).strip()
+        label=str(data.get("label","")).strip()[:50] or "Mirror"
+        if not 50<len(session)<5000:
+            return web.json_response({"error":"Enter a valid Telegram StringSession."},status=400)
+        pool=self._pool()
+        if not pool: return web.json_response({"error":"Mirror pool unavailable"},status=503)
+        if len(pool.mirrors)>=MAX_MIRRORS:
+            return web.json_response({"error":"Maximum of 10 accounts reached"},status=409)
+        try: cipher=_fernet()
+        except RuntimeError as exc:
+            return web.json_response({"error":str(exc)},status=503)
+        api=os.getenv("TG_API_ID","")
+        api_hash=os.getenv("TG_API_HASH","")
+        if not api.isdigit() or not api_hash:
+            return web.json_response({"error":"TG_API_ID and TG_API_HASH required"},status=503)
+        client=None
+        try:
+            client=TelegramClient(StringSession(session),int(api),api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise ValueError("Telegram session is not authorized")
+            account=await client.get_me()
+            aid=int(account.id)
+            if self._mirror(aid):
+                return web.json_response({"error":"This Telegram account is already connected"},status=409)
+            from mirror import ProviderMirror
+            mirror=ProviderMirror(client,self.botmod.PROVIDER,self.app,
+                self.botmod.finish,self.botmod.classify,self.botmod.is_admin,self.botmod.PRICE_LABEL,
+                session_ttl=int(os.getenv("MIRROR_SESSION_TTL","300")),
+                result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360")))
+            mirror.account_id=aid
+            mirror.phone_masked=("••••"+str(account.phone)[-4:]) if getattr(account,"phone",None) else None
+            mirror.label=label
+            mirror.source="panel"
+            await mirror.start()
+            async with pool.lock:
+                if len(pool.mirrors)>=MAX_MIRRORS: raise ValueError("Maximum account count reached")
+                pool.mirrors.append(mirror)
+                mirror.on_terminal=pool.on_finished
+                mirror.observed_callback=self.observe
+                self.app.bot_data.setdefault("mirror_clients",[]).append(client)
+                with closing(self.botmod.db()) as con:
+                    encrypted=cipher.encrypt(session.encode("utf-8")).decode("ascii")
+                    con.execute("""INSERT INTO session_registry(account_id,label,source,secret,enabled,updated_at)
+                          VALUES(?,?,?,?,1,?)
+                          ON CONFLICT(account_id) DO UPDATE SET label=excluded.label,
+                           source='panel',secret=excluded.secret,enabled=1,updated_at=excluded.updated_at""",
+                          (aid,label,"panel",encrypted,int(time.time())))
+                    con.commit()
+                await pool._drain()
+            return web.json_response({"ok":True,"id":aid,"label":label})
+        except (ValueError,InvalidToken) as exc:
+            return web.json_response({"error":str(exc)},status=400)
+        except Exception:
+            LOG.exception("Unable to add Telegram session")
+            return web.json_response({"error":"Could not connect this session. Check authorization."},status=502)
+        finally:
+            if client:
+                m=self._mirror(getattr(getattr(client,"_self_id",None),"id",-1)) if False else None
+                # Do not disconnect a newly registered client. Close unsuccessful ones.
+                if client not in self.app.bot_data.get("mirror_clients",[]):
+                    try: await client.disconnect()
+                    except Exception: pass
+
+    async def remove_session(self,req):
+        try: aid=int(req.match_info["aid"])
+        except ValueError: raise web.HTTPBadRequest()
+        row=self._row(aid)
+        if not row: return web.json_response({"error":"Unknown account"},status=404)
+        pool=self._pool()
+        mirror=self._mirror(aid)
+        if mirror:
+            async with pool.lock:
+                if mirror.active_order is not None or mirror in pool.owners.values():
+                    return web.json_response({"error":"Account is busy. Finish current customer first."},status=409)
+                pool.mirrors.remove(mirror)
+                await mirror.stop()
+                await mirror.client.disconnect()
+                if mirror.client in self.app.bot_data.get("mirror_clients",[]):
+                    self.app.bot_data["mirror_clients"].remove(mirror.client)
+                await pool._drain()
+        with closing(self.botmod.db()) as con:
+            if row["source"]=="panel":
+                con.execute("DELETE FROM session_registry WHERE account_id=?",(aid,))
+            else:
+                con.execute("UPDATE session_registry SET enabled=0 WHERE account_id=?",(aid,))
+            con.commit()
+        return web.json_response({"ok":True,"message":"Panel-added session removed; environment session disabled."})
+
+    async def enable_session(self,req):
+        try: aid=int(req.match_info["aid"])
+        except ValueError: raise web.HTTPBadRequest()
+        row=self._row(aid)
+        if not row or row["source"]!="env":
+            return web.json_response({"error":"Only environment-managed accounts can be reenabled here."},status=400)
+        if self._mirror(aid):
+            return web.json_response({"error":"Account is already online."},status=409)
+        value=self.disabled_env.get(aid)
+        if not value:
+            return web.json_response({"error":"The account must be reenabled after a Railway restart."},status=409)
+        # Do not expose the secret to the browser: reuse internal add path only.
+        return web.json_response({"error":"Set enabled=1 in the registry and restart DigiVerify to reenable this env account."},status=409)
+
+    async def refresh(self,req):
+        aid=int(req.match_info["aid"])
+        m=self._mirror(aid)
+        if not m: return web.json_response({"error":"Account offline"},status=404)
+        p=self._pool()
+        if m.active_order is not None or m in p.owners.values():
+            return web.json_response({"error":"Account busy. Refresh only while idle."},status=409)
+        now=time.monotonic()
+        if now-self.refresh_at.get(aid,0)<30:
+            return web.json_response({"error":"Wait 30 seconds before refreshing again."},status=429)
+        try:
+            await m.client.send_message(m.peer,"/start")
+            self.refresh_at[aid]=now
+            return web.json_response({"ok":True,"message":"Requested an updated balance from original bot. Watch for its reply."})
+        except Exception:
+            LOG.exception("Balance refresh failed")
+            return web.json_response({"error":"Original bot did not accept the refresh request."},status=502)
+
+    async def threshold(self,req):
+        aid=int(req.match_info["aid"])
+        data=await self._json(req)
+        try: value=int(data.get("threshold"))
+        except (ValueError,TypeError): value=-1
+        if not 0<=value<=100:
+            return web.json_response({"error":"Threshold must be 0 to 100"},status=400)
+        with closing(self.botmod.db()) as con:
+            cur=con.execute("UPDATE session_registry SET low_threshold=?,last_alert=0 WHERE account_id=?",(value,aid))
+            con.commit()
+        if not cur.rowcount: return web.json_response({"error":"Unknown account"},status=404)
+        return web.json_response({"ok":True})
+
+    async def record_topup(self,req):
+        aid=int(req.match_info["aid"])
+        data=await self._json(req)
+        try:
+            cents=int((Decimal(str(data.get("amount","0")))*100).to_integral_exact())
+            if not 0<cents<=100000000: raise ValueError()
+        except (InvalidOperation,ValueError):
+            return web.json_response({"error":"Enter a positive amount in USD."},status=400)
+        note=str(data.get("note","")).strip()[:240] or "Manual provider payment record"
+        with closing(self.botmod.db()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            cur=con.execute("UPDATE session_registry SET topup_recorded_cents=topup_recorded_cents+? WHERE account_id=?",(cents,aid))
+            if not cur.rowcount:
+                con.rollback()
+                return web.json_response({"error":"Unknown account"},status=404)
+            con.execute("INSERT INTO session_topup_notes(account_id,cents,note,by_uid,created) VALUES(?,?,?,?,?)",
+                        (aid,cents,note,req["admin_uid"],int(time.time())))
+            con.commit()
+        return web.json_response({"ok":True,"notice":"Payment recorded locally. No credit is added to the original provider account; check upstream to confirm."})
+
+    async def customer_credit(self,req):
+        data=await self._json(req)
+        try:
+            uid=int(data.get("uid","0"))
+            cents=int((Decimal(str(data.get("amount","0")))*100).to_integral_exact())
+            if uid<=0 or not 0<cents<=100000000: raise ValueError()
+        except (InvalidOperation,ValueError):
+            return web.json_response({"error":"Valid customer Telegram ID and USD amount required."},status=400)
+        self.botmod.user(uid)
+        with closing(self.botmod.db()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("UPDATE users SET balance=balance+? WHERE uid=?",(cents,uid))
+            con.execute("INSERT INTO ledger(uid,amount,reason,created) VALUES(?,?,?,?,?)",
+                        (uid,cents,"Panel credit by "+str(req["admin_uid"]),int(time.time())))
+            con.commit()
+        return web.json_response({"ok":True,"message":"Customer DigiVerify wallet credited successfully."})
+
+    async def cancel_order(self,req):
+        try: oid=int(req.match_info["oid"])
+        except ValueError: raise web.HTTPBadRequest()
+        with closing(self.botmod.db()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row=con.execute("SELECT uid,status FROM orders WHERE id=?",(oid,)).fetchone()
+            if not row:
+                con.rollback()
+                return web.json_response({"error":"Order not found."},status=404)
+            if row["status"] not in ("queued","processing"):
+                con.rollback()
+                return web.json_response({"error":"This order is already completed."},status=409)
+            con.execute("UPDATE orders SET status='cancelled',result='Cancelled by panel admin' WHERE id=?",(oid,))
+            con.commit()
+        pool=self._pool()
+        if pool: pool.cancel(oid)
+        try: await self.app.bot.send_message(row["uid"],f"🛑 Order #{oid} cancelled by administrator. No wallet deduction.")
+        except Exception: pass
+        return web.json_response({"ok":True})
