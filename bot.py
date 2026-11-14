@@ -636,6 +636,13 @@ async def init(app):
                 mirror.phone_masked=("••••"+str(account.phone)[-4:]) if getattr(account,"phone",None) else None
                 mirror.label=label
                 mirror.source=source
+                from provider_setup import setup_provider_account
+                ready,setup_message=await setup_provider_account(client,PROVIDER)
+                mirror.setup_state="ready" if ready else "setup_failed"
+                mirror.setup_message=setup_message
+                mirror.healthy=bool(ready)
+                if not ready:
+                    logging.warning("Telegram session %s provider setup failed: %s",aid,setup_message)
                 await mirror.start()
                 clients.append(client)
                 mirrors.append(mirror)
