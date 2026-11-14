@@ -5,6 +5,7 @@ from pool import MirrorPool
 
 class FakeMirror:
     def __init__(self):
+        self.client=SimpleNamespace(is_connected=lambda:True)
         self.owner=None
         self.active_order=None
         self.lease_until=0
