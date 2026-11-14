@@ -36,6 +36,26 @@ input:focus,textarea:focus{border-color:#71aaff}textarea{height:126px;resize:ver
 .modal{width:100%;max-width:550px;max-height:88vh;overflow:auto;background:#17283e;border:1px solid #3b5472;border-radius:23px 23px 0 0;padding:23px 18px}
 .toast{position:fixed;bottom:100px;left:12px;right:12px;margin:auto;max-width:460px;border:1px solid #6c84a3;background:#2b4160;padding:13px;border-radius:11px;z-index:20}
 @media(min-width:800px){.grid{grid-template-columns:repeat(4,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}.bar{width:max-content;left:50%;transform:translateX(-50%);border:1px solid var(--line);border-radius:18px;bottom:15px}.modal-bg{align-items:center}.modal{border-radius:23px}}
+
+/* Phone-first controls and improved readability */
+:root{--card:#17263b;--line:#344a64}
+button,.btn{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #70aaff;outline-offset:2px}
+.btn:active,.nav:active{transform:scale(.98)}
+input,textarea{font-size:16px;max-width:100%}
+.card{box-shadow:0 7px 24px #00000018}
+@media(max-width:600px){
+ .wrap{padding:14px 12px 110px}
+ .header{margin-bottom:15px}
+ .brand{font-size:21px}
+ .card{border-radius:16px;padding:15px;margin:10px 0}
+ .session-grid{grid-template-columns:1fr}
+ .buttons .btn{flex:1 1 44%;min-height:46px}
+ .row{overflow-wrap:anywhere}
+ .nav{min-width:0;flex:1;padding:10px 3px}
+ .bar{padding-inline:5px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
 <body>
@@ -136,7 +156,7 @@ function finance(){
  html+='<div class="notice">تسجيل شحن للحساب الأصلي يسجّل الدفع فقط، ولا يضيف أموالاً داخل البوت الأصلي. يجب تأكيد عملية الشحن من المزود أولاً.</div></div>';return html;
 }
 function settings(){
- return headline("⚙️ الإعدادات","")+'<div class="card"><h3>📱 تثبيت التطبيق على الهاتف</h3><p class="note">Android: افتح هذه الصفحة في Chrome ثم اختر Install App أو Add to Home Screen. iPhone: افتحها في Safari ثم مشاركة → Add to Home Screen.</p><button class="btn primary" data-action="install">⬇️ تثبيت DigiVerify Control</button></div><div class="card"><h3>🔔 التنبيهات</h3><p class="note">تنبيهات قلة الرصيد وانقطاع الاتصال تصل إلى الأدمن عبر Telegram حتى عندما يكون تطبيق الهاتف مغلقًا.</p><button class="btn" data-action="notification">تفعيل إشعارات المتصفح</button></div><div class="card"><h3>🔐 إدارة الدخول</h3><p class="note">دخول الأدمن باستخدام رمز مؤقت يصدر من /panel. جلسات الحسابات محفوظة مشفرة ولا تظهر في التقرير.</p><button class="btn danger" data-action="logout">تسجيل الخروج</button></div>';
+ return headline("⚙️ الإعدادات","")+'<div class="card"><h3>📱 تثبيت التطبيق على الهاتف</h3><p class="note">Android: افتح هذه الصفحة في Chrome ثم اختر Install App أو Add to Home Screen. iPhone: افتحها في Safari ثم مشاركة → Add to Home Screen.</p><button class="btn primary" data-action="install">⬇️ تثبيت DigiVerify Control</button></div><div class="card"><h3>🔔 التنبيهات</h3><p class="note">تنبيهات قلة الرصيد وانقطاع الاتصال تصل إلى الأدمن عبر Telegram حتى عندما يكون تطبيق الهاتف مغلقًا.</p><button class="btn" data-action="notification">تفعيل إشعارات المتصفح</button></div><div class="card"><h3>🔐 إدارة الدخول</h3><p class="note">دخول الأدمن باستخدام رمز مؤقت يصدر من /panel. جلسات الحسابات محفوظة مشفرة ولا تظهر في التقرير. يبقى هذا الهاتف مسجّل الدخول لمدة تصل إلى سنة، حتى بعد إعادة تشغيل الخادم. يمكنك إلغاء الدخول في أي وقت.</p><button class="btn danger" data-action="logout">تسجيل الخروج</button></div>';
 }
 function render(){document.querySelectorAll(".nav").forEach(function(e){e.classList.toggle("active",e.dataset.tab===tab)});$("body").innerHTML=({home:home,sessions:sessions,queue:queue,finance:finance,settings:settings}[tab]||home)()}
 function alertIfNeeded(){S.sessions.forEach(function(s){if(s.low&&!lowCache[s.id]){toast("🚨 رصيد منخفض: "+s.label,true);if("Notification" in window&&Notification.permission==="granted")new Notification("DigiVerify",{body:s.label+" · "+s.total+" remaining"})}lowCache[s.id]=s.low})}
