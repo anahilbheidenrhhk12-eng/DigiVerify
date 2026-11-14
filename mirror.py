@@ -46,6 +46,7 @@ class ProviderMirror:
         self.mute_until = 0
         self.on_terminal = None
         self.observed_callback = None
+        self.needs_rotation = False
 
     async def start(self):
         self.peer = await self.client.get_entity(self.provider_name)
@@ -75,6 +76,7 @@ class ProviderMirror:
             return False
         if self.owner != uid or reset:
             self.owner = uid
+            self.needs_rotation = False
             self.callbacks.clear()
             self.sent.clear()
         self.lease_until = time.monotonic() + self.session_ttl
@@ -141,6 +143,7 @@ class ProviderMirror:
             self.active_order = None
             self.order_owner = None
             self.lease_until = time.monotonic() + 20
+            self.needs_rotation = True
             if self.on_terminal:
                 asyncio.create_task(self.on_terminal(self,uid))
             if status != "cancelled":
@@ -283,6 +286,7 @@ class ProviderMirror:
         # The one upstream account should be available for another customer
         # shortly after the terminal result has arrived.
         self.lease_until = time.monotonic() + 20
+        self.needs_rotation = True
         if self.timeout_task:
             self.timeout_task.cancel()
         if self.on_terminal:
