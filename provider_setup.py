@@ -54,7 +54,7 @@ async def setup_provider_account(client,provider):
         for _,button in _buttons([msg]):
             url=getattr(button,"url",None)
             if url and GROUP_LINK.fullmatch(url):group_links.append(url)
-    configured=os.getenv('PROVIDER_GROUP_LINK','').strip()
+    configured=os.getenv('PROVIDER_GROUP_LINK','https://t.me/+MHk3r7Zh0kFiYTI1').strip()
     if configured and GROUP_LINK.fullmatch(configured):group_links.insert(0,configured)
     # Provider may be ready without a mandatory group; do not force an unknown join.
     if not group_links and _has_ready_message(messages):
