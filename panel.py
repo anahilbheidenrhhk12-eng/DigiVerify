@@ -18,6 +18,7 @@ from aiohttp import web
 from cryptography.fernet import Fernet, InvalidToken
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError
 
 BASE=Path(__file__).resolve().parent
 LOG=logging.getLogger("digiverify.panel")
@@ -110,6 +111,8 @@ class AdminPanel:
         self.task=None
         self.refresh_at={}
         self.disabled_env={}
+        self.phone_logins={}
+        self.phone_rate={}
         self.server=web.Application(client_max_size=65536,middlewares=[self._security])
         self._routes()
 
@@ -126,6 +129,8 @@ class AdminPanel:
         self.server.router.add_get("/api/state",self.state)
         self.server.router.add_post("/api/logout",self.logout)
         self.server.router.add_post("/api/sessions",self.add_session)
+        self.server.router.add_post("/api/phone/start",self.phone_start)
+        self.server.router.add_post("/api/phone/verify",self.phone_verify)
         self.server.router.add_post("/api/sessions/{aid}/refresh",self.refresh)
         self.server.router.add_post("/api/sessions/{aid}/threshold",self.threshold)
         self.server.router.add_post("/api/sessions/{aid}/topup-note",self.record_topup)
@@ -381,23 +386,16 @@ class AdminPanel:
                     if row and row["last_error"]!=err:
                         await self._notify(f"🔴 DigiVerify mirror disconnected: {m.label}\n{err}")
 
-    async def add_session(self,req):
-        data=await self._json(req)
-        session=str(data.get("session","")).strip()
-        label=str(data.get("label","")).strip()[:50] or "Mirror"
-        if not 50<len(session)<5000:
-            return web.json_response({"error":"Enter a valid Telegram StringSession."},status=400)
+    async def _attach_session(self,session,label,source="panel"):
+        """Authorize and register a session on the live pool (never expose secrets)."""
         pool=self._pool()
-        if not pool: return web.json_response({"error":"Mirror pool unavailable"},status=503)
-        if len(pool.mirrors)>=MAX_MIRRORS:
-            return web.json_response({"error":"Maximum of 10 accounts reached"},status=409)
-        try: cipher=_fernet()
-        except RuntimeError as exc:
-            return web.json_response({"error":str(exc)},status=503)
+        if not pool: raise RuntimeError("Mirror pool unavailable")
+        if len(pool.mirrors)>=MAX_MIRRORS: raise ValueError("Maximum of 10 accounts reached")
         api=os.getenv("TG_API_ID","")
         api_hash=os.getenv("TG_API_HASH","")
         if not api.isdigit() or not api_hash:
-            return web.json_response({"error":"TG_API_ID and TG_API_HASH required"},status=503)
+            raise RuntimeError("TG_API_ID and TG_API_HASH required")
+        cipher=_fernet()
         client=None
         try:
             client=TelegramClient(StringSession(session),int(api),api_hash)
@@ -407,7 +405,7 @@ class AdminPanel:
             account=await client.get_me()
             aid=int(account.id)
             if self._mirror(aid):
-                return web.json_response({"error":"This Telegram account is already connected"},status=409)
+                raise ValueError("This Telegram account is already connected")
             from mirror import ProviderMirror
             mirror=ProviderMirror(client,self.botmod.PROVIDER,self.app,
                 self.botmod.finish,self.botmod.classify,self.botmod.is_admin,self.botmod.PRICE_LABEL,
@@ -416,35 +414,137 @@ class AdminPanel:
             mirror.account_id=aid
             mirror.phone_masked=("••••"+str(account.phone)[-4:]) if getattr(account,"phone",None) else None
             mirror.label=label
-            mirror.source="panel"
+            mirror.source=source
             await mirror.start()
             async with pool.lock:
-                if len(pool.mirrors)>=MAX_MIRRORS: raise ValueError("Maximum account count reached")
+                if len(pool.mirrors)>=MAX_MIRRORS:
+                    await mirror.stop()
+                    raise ValueError("Maximum account count reached")
+                with closing(self.botmod.db()) as con:
+                    if source=="panel":
+                        encrypted=cipher.encrypt(session.encode("utf-8")).decode("ascii")
+                        con.execute("""INSERT INTO session_registry(account_id,label,source,secret,enabled,updated_at)
+                              VALUES(?,?,?,?,1,?)
+                              ON CONFLICT(account_id) DO UPDATE SET label=excluded.label,
+                               source='panel',secret=excluded.secret,enabled=1,updated_at=excluded.updated_at""",
+                               (aid,label,"panel",encrypted,int(time.time())))
+                    else:
+                        con.execute("""INSERT INTO session_registry(account_id,label,source,enabled,updated_at)
+                             VALUES(?,?,?,1,?)
+                             ON CONFLICT(account_id) DO UPDATE SET enabled=1,updated_at=excluded.updated_at""",
+                             (aid,label,"env",int(time.time())))
+                    con.commit()
                 pool.mirrors.append(mirror)
                 mirror.on_terminal=pool.on_finished
                 mirror.observed_callback=self.observe
                 self.app.bot_data.setdefault("mirror_clients",[]).append(client)
-                with closing(self.botmod.db()) as con:
-                    encrypted=cipher.encrypt(session.encode("utf-8")).decode("ascii")
-                    con.execute("""INSERT INTO session_registry(account_id,label,source,secret,enabled,updated_at)
-                          VALUES(?,?,?,?,1,?)
-                          ON CONFLICT(account_id) DO UPDATE SET label=excluded.label,
-                           source='panel',secret=excluded.secret,enabled=1,updated_at=excluded.updated_at""",
-                          (aid,label,"panel",encrypted,int(time.time())))
-                    con.commit()
                 await pool._drain()
+            return aid
+        finally:
+            if client and client not in self.app.bot_data.get("mirror_clients",[]):
+                try: await client.disconnect()
+                except Exception: pass
+
+    async def add_session(self,req):
+        data=await self._json(req)
+        session=str(data.get("session","")).strip()
+        label=str(data.get("label","")).strip()[:50] or "Mirror"
+        if not 50<len(session)<5000:
+            return web.json_response({"error":"Enter a valid Telegram StringSession."},status=400)
+        try:
+            aid=await self._attach_session(session,label)
             return web.json_response({"ok":True,"id":aid,"label":label})
-        except (ValueError,InvalidToken) as exc:
+        except ValueError as exc:
             return web.json_response({"error":str(exc)},status=400)
         except Exception:
-            LOG.exception("Unable to add Telegram session")
-            return web.json_response({"error":"Could not connect this session. Check authorization."},status=502)
-        finally:
+            LOG.exception("Unable to register Telegram session")
+            return web.json_response({"error":"Could not connect this session. Check login and server settings."},status=502)
+
+    async def phone_start(self,req):
+        """Start a Telegram login on the user's own authorized secondary number."""
+        uid=req["admin_uid"]
+        now=time.monotonic()
+        recent=[t for t in self.phone_rate.get(uid,[]) if now-t<1200]
+        if len(recent)>=3:
+            return web.json_response({"error":"Telegram login limit reached. Retry in 20 minutes."},status=429)
+        data=await self._json(req)
+        phone=str(data.get("phone","")).strip()
+        label=str(data.get("label","")).strip()[:50] or "Phone Mirror"
+        if not re.fullmatch(r"\+[1-9]\d{7,14}",phone):
+            return web.json_response({"error":"Phone must be in international format: +countrycode..."},status=400)
+        pool=self._pool()
+        if not pool or len(pool.mirrors)>=MAX_MIRRORS:
+            return web.json_response({"error":"No mirror slots available"},status=409)
+        api=os.getenv("TG_API_ID","")
+        api_hash=os.getenv("TG_API_HASH","")
+        if not api.isdigit() or not api_hash:
+            return web.json_response({"error":"Telegram API credentials are missing on Railway."},status=503)
+        try: _fernet()
+        except RuntimeError:
+            return web.json_response({"error":"Encryption key not configured."},status=503)
+        client=None
+        try:
+            client=TelegramClient(StringSession(),int(api),api_hash)
+            await client.connect()
+            code=await client.send_code_request(phone)
+            ticket=secrets.token_urlsafe(20)
+            self.phone_logins[ticket]={"client":client,"phone":phone,
+                     "hash":code.phone_code_hash,"uid":uid,"label":label,
+                     "expires":now+600,"attempts":0,"needs_password":False}
+            self.phone_rate[uid]=recent+[now]
+            return web.json_response({"ok":True,"ticket":ticket,
+                "message":"Telegram sent a login code to your Telegram app or SMS."})
+        except Exception:
+            LOG.warning("Unable to send Telegram sign-in code",exc_info=False)
             if client:
-                # Close unsuccessful attempts. Never reveal the session string in logs.
-                if client not in self.app.bot_data.get("mirror_clients",[]):
-                    try: await client.disconnect()
-                    except Exception: pass
+                try: await client.disconnect()
+                except Exception: pass
+            return web.json_response({"error":"Telegram could not send the sign-in code. Check the phone number and rate limits."},status=502)
+
+    async def phone_verify(self,req):
+        data=await self._json(req)
+        ticket=str(data.get("ticket","")).strip()
+        entry=self.phone_logins.get(ticket)
+        if not entry or entry["uid"]!=req["admin_uid"] or entry["expires"]<time.monotonic():
+            return web.json_response({"error":"Login session expired. Start again."},status=401)
+        entry["attempts"]+=1
+        if entry["attempts"]>5:
+            self.phone_logins.pop(ticket,None)
+            await entry["client"].disconnect()
+            return web.json_response({"error":"Too many login attempts."},status=429)
+        code=str(data.get("code","")).strip()
+        password=str(data.get("password",""))
+        client=entry["client"]
+        try:
+            if entry["needs_password"]:
+                if not password:
+                    return web.json_response({"needs_password":True,"ticket":ticket})
+                await client.sign_in(password=password)
+            else:
+                if not re.fullmatch(r"\d{4,8}",code):
+                    return web.json_response({"error":"Enter the Telegram login code."},status=400)
+                try:
+                    await client.sign_in(entry["phone"],code,phone_code_hash=entry["hash"])
+                except SessionPasswordNeededError:
+                    entry["needs_password"]=True
+                    if password:
+                        await client.sign_in(password=password)
+                    else:
+                        return web.json_response({"needs_password":True,"ticket":ticket,
+                            "message":"This account requires its two-step verification password."})
+            if not await client.is_user_authorized():
+                return web.json_response({"error":"Telegram login not completed."},status=400)
+            string=client.session.save()
+            label=entry["label"]
+            self.phone_logins.pop(ticket,None)
+            await client.disconnect()
+            aid=await self._attach_session(string,label)
+            return web.json_response({"ok":True,"id":aid,"label":label})
+        except ValueError as exc:
+            return web.json_response({"error":str(exc)},status=400)
+        except Exception:
+            LOG.warning("Telegram login code or password was rejected",exc_info=False)
+            return web.json_response({"error":"Telegram rejected the login details. Check the code/password."},status=400)
 
     async def remove_session(self,req):
         try: aid=int(req.match_info["aid"])
@@ -476,14 +576,19 @@ class AdminPanel:
         except ValueError: raise web.HTTPBadRequest()
         row=self._row(aid)
         if not row or row["source"]!="env":
-            return web.json_response({"error":"Only environment-managed accounts can be reenabled here."},status=400)
+            return web.json_response({"error":"Only environment-managed sessions can be reenabled here."},status=400)
         if self._mirror(aid):
-            return web.json_response({"error":"Account is already online."},status=409)
-        value=self.disabled_env.get(aid)
-        if not value:
-            return web.json_response({"error":"The account must be reenabled after a Railway restart."},status=409)
-        # Do not expose the secret to the browser: reuse internal add path only.
-        return web.json_response({"error":"Set enabled=1 in the registry and restart DigiVerify to reenable this env account."},status=409)
+            return web.json_response({"error":"Account is already online"},status=409)
+        session=self.disabled_env.get(aid)
+        if not session:
+            return web.json_response({"error":"Railway restart required to retrieve this environment session."},status=409)
+        try:
+            await self._attach_session(session,row["label"],source="env")
+            self.disabled_env.pop(aid,None)
+            return web.json_response({"ok":True})
+        except Exception:
+            LOG.exception("Could not re-enable environment session")
+            return web.json_response({"error":"Account could not reconnect."},status=502)
 
     async def refresh(self,req):
         aid=int(req.match_info["aid"])
