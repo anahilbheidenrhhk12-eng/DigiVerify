@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1526"><meta name="apple-mobile-web-app-capable" content="yes">
+<title>DigiVerify Control</title><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--card:#18263b;--line:#30445e;--text:#eaf3ff;--muted:#97abc5;--green:#38d9a3;--red:#ff8791;--gold:#f8ce77;--blue:#5996ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(140deg,#11243a,#0b1220 65%);color:var(--text);font:14px system-ui,"Segoe UI",Tahoma,sans-serif}
+button,input,textarea{font:inherit}button{cursor:pointer;color:inherit}.hide{display:none!important}.wrap{margin:auto;max-width:1100px;padding:18px 15px 120px}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:23px;gap:12px}.brand{font-size:23px;font-weight:900}.sub{font-size:12px;color:var(--muted)}
+.logo{font-size:23px;padding:8px 11px;border-radius:14px;background:linear-gradient(135deg,#377af1,#8052dd)}
+.headerleft{display:flex;align-items:center;gap:10px}.online{color:var(--green)}h1,h2,h3{margin:0 0 12px}
+h2{font-size:20px}.card{background:var(--card);border:1px solid var(--line);border-radius:19px;padding:17px;margin:13px 0}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:15px}.stat span,.meta,.note{color:var(--muted);font-size:12px;line-height:1.7}.stat strong{display:block;font-size:28px;margin:9px 0 2px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid #304158;padding:11px 0}.row:last-child{border-bottom:none}
+.chip{display:inline-flex;border-radius:20px;background:#304765;border:1px solid #466184;padding:5px 9px;font-size:11px;font-weight:bold}
+.good{color:var(--green);border-color:#2d6b56;background:#193d39}.bad{color:var(--red);border-color:#7a4750;background:#3d2933}.warning{color:var(--gold);border-color:#7b653b;background:#423622}
+.btn{background:#263c56;border:1px solid #3e5c7a;border-radius:11px;padding:10px 13px;font-weight:700;min-height:42px}
+.btn.primary{background:linear-gradient(100deg,#3683ed,#655ff4);border-color:#4b8cec}.btn.danger{background:#522c36;border-color:#854852}
+.btn:disabled{opacity:.4}.buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.session-grid{display:grid;gap:12px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:13px 0}.number{text-align:center;background:#0f1c2f;border-radius:12px;padding:11px 4px}
+.number strong{display:block;font-size:24px}.number span{font-size:11px;color:var(--muted)}
+.notice{background:#3e3423;border:1px solid #78643e;border-radius:12px;color:#ffe1ad;padding:12px;margin:12px 0;font-size:13px;line-height:1.6}
+.notice.error{background:#3e2732;border-color:#884d57;color:#ffcbd0}
+.bar{position:fixed;bottom:0;left:0;right:0;padding:9px 8px calc(10px + env(safe-area-inset-bottom));display:flex;justify-content:center;gap:5px;background:#101b2ceD;backdrop-filter:blur(15px);border-top:1px solid var(--line);z-index:6}
+.nav{border:0;border-radius:12px;background:transparent;color:var(--muted);padding:9px 7px;min-width:65px;font-size:11px;display:grid;gap:4px;justify-items:center}
+.nav b{font-size:20px}.nav.active{background:#284b74;color:white}
+label{display:block;color:var(--muted);font-size:12px;margin-top:11px}
+input,textarea{width:100%;display:block;margin:6px 0 12px;border:1px solid #3c5674;color:white;background:#101e32;border-radius:12px;padding:12px;outline:none}
+input:focus,textarea:focus{border-color:#71aaff}textarea{height:126px;resize:vertical;direction:ltr;text-align:left}
+.login-page{min-height:100vh;display:grid;place-items:center;padding:20px}.login-box{width:min(440px,100%);padding:27px;background:var(--card);border:1px solid var(--line);border-radius:23px}
+.login-box p{line-height:1.9;color:var(--muted)}code{background:#263c5b;color:#b4d1ff;padding:3px 5px;border-radius:5px}
+.modal-bg{position:fixed;inset:0;background:#000b;z-index:10;display:flex;align-items:flex-end;justify-content:center}
+.modal{width:100%;max-width:550px;max-height:88vh;overflow:auto;background:#17283e;border:1px solid #3b5472;border-radius:23px 23px 0 0;padding:23px 18px}
+.toast{position:fixed;bottom:100px;left:12px;right:12px;margin:auto;max-width:460px;border:1px solid #6c84a3;background:#2b4160;padding:13px;border-radius:11px;z-index:20}
+@media(min-width:800px){.grid{grid-template-columns:repeat(4,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}.bar{width:max-content;left:50%;transform:translateX(-50%);border:1px solid var(--line);border-radius:18px;bottom:15px}.modal-bg{align-items:center}.modal{border-radius:23px}}
+</style>
+</head>
+<body>
+<div id="login" class="login-page">
+<section class="login-box"><div class="logo" style="display:inline-block">🪞</div><h1 style="margin-top:16px">DigiVerify Control</h1>
+<p>لوحة الجلسات المباشرة. افتح <b>@DigitopVerifyBot</b> وأرسل <code>/panel</code>، ثم انسخ رمز الدخول المؤقت هنا.</p>
+<form id="login-form"><label>رمز الدخول من Telegram</label><input name="code" dir="ltr" required autocomplete="one-time-code" placeholder="Paste temporary login code"><button class="btn primary" type="submit" style="width:100%">تسجيل الدخول 🔐</button></form>
+<p class="note">رمز تسجيل الدخول صالح لمرة واحدة فقط. لا تُرسل TG_SESSION_STRING داخل Telegram.</p></section></div>
+<div id="app" class="wrap hide">
+<header class="header"><div class="headerleft"><div class="logo">🪞</div><div><div class="brand">DigiVerify</div><div class="sub"><span class="online">●</span> Live Control Center</div></div></div><button id="install" class="btn">⬇️ تثبيت</button></header>
+<main id="body"></main></div>
+<div class="bar hide" id="navigation">
+<button class="nav active" data-tab="home"><b>📊</b>الرئيسية</button>
+<button class="nav" data-tab="sessions"><b>🪞</b>الجلسات</button>
+<button class="nav" data-tab="queue"><b>⏳</b>الطلبات</button>
+<button class="nav" data-tab="finance"><b>💰</b>الشحن</button>
+<button class="nav" data-tab="settings"><b>⚙️</b>إعدادات</button>
+</div><div id="modal"></div><div class="toast hide" id="toast"></div>
+<script>
+"use strict";
+var S=null,CSRF="",tab="home",timer=null,promptInstall=null,lowCache={};
+function $(id){return document.getElementById(id)}
+function safe(x){return String(x===null||x===undefined?"":x).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+function money(c){return (Number(c||0)/100).toFixed(2)}
+function date(t){return t?new Date(t*1000).toLocaleString("ar-TN"):"لم يتم رصده"}
+function toast(t,err){var el=$("toast");el.textContent=t;el.style.borderColor=err?"#ff8791":"#6c84a3";el.classList.remove("hide");setTimeout(function(){el.classList.add("hide")},3500)}
+function loginView(){clearInterval(timer);timer=null;S=null;CSRF="";$("app").classList.add("hide");$("navigation").classList.add("hide");$("login").classList.remove("hide")}
+function appView(){$("app").classList.remove("hide");$("navigation").classList.remove("hide");$("login").classList.add("hide")}
+async function api(path,method,data){
+ method=method||"GET";var headers={"Accept":"application/json"};
+ if(method!=="GET"){headers["Content-Type"]="application/json";if(CSRF)headers["X-DigiVerify-CSRF"]=CSRF}
+ var res=await fetch(path,{method:method,headers:headers,credentials:"same-origin",body:data===undefined?undefined:JSON.stringify(data),cache:"no-store"});
+ var v={};try{v=await res.json()}catch(e){}
+ if(res.status===401){loginView();throw Error("سجّل الدخول مرة أخرى عبر /panel")}
+ if(!res.ok)throw Error(v.error||"HTTP "+res.status);
+ return v;
+}
+async function fetchState(){
+ var result=await api("/api/state");S=result;CSRF=result.csrf;appView();
+ if(document.activeElement&&["INPUT","TEXTAREA"].includes(document.activeElement.tagName))return;
+ render();alertIfNeeded();
+}
+function pill(status){var cls=status==="online"?"good":status==="processing"||status==="in-use"?"warning":"bad";
+ var title=({online:"متصل",processing:"يعالج طلب", "in-use":"مستخدم",offline:"غير متصل",disabled:"معطّل"})[status]||status;
+ return '<span class="chip '+cls+'">'+safe(title)+'</span>'}
+function headline(t,desc){return '<div class="row" style="border:0"><h2>'+t+'</h2><span class="meta">'+(desc||"")+'</span></div>'}
+function stat(label,n,comment){return '<div class="stat"><span>'+label+'</span><strong>'+n+'</strong><small class="meta">'+(comment||"")+'</small></div>'}
+function home(){
+ var connected=S.sessions.filter(function(s){return s.online}).length;
+ var busy=S.sessions.filter(function(s){return s.status==="processing"||s.status==="in-use"}).length;
+ var alerts=S.sessions.filter(function(s){return s.low||s.status==="offline"}).length;
+ var html=headline("📊 مراقبة حيّة","تحديث كل 5 ثوانٍ");
+ html+='<div class="grid">'+stat("الحسابات المتصلة",connected+" / "+S.target,"الحد الأقصى "+S.max)+stat("الحسابات المشغولة",busy,"جلسات عمل")+stat("العملاء المنتظرون",S.queue.length,"طابور FIFO")+stat("تنبيهات عاجلة",alerts,"رصيد أو اتصال")+'</div>';
+ if(connected<S.target)html+='<div class="notice">🪞 الهدف المبدئي '+S.target+' حسابات. أضف '+(S.target-connected)+' جلسة للوصول للهدف.</div>';
+ S.sessions.forEach(function(s){if(s.low||s.status==="offline")html+='<div class="notice '+(s.status==="offline"?"error":"")+'">🚨 '+safe(s.label)+' — '+(s.low?"الرصيد منخفض: "+s.total:"الحساب غير متصل")+'</div>'});
+ html+='<div class="card"><h3>🪞 حالة الجلسات</h3>';
+ S.sessions.forEach(function(s){html+='<div class="row"><span>'+pill(s.status)+' <b>'+safe(s.label)+'</b></span><span class="meta">الرصيد: '+(s.total===null?"غير معروف":s.total)+'</span></div>'});
+ html+=(S.sessions.length?"":"<p class='note'>لا توجد جلسات مضافة بعد.</p>")+'</div>';
+ html+='<div class="card"><h3>📈 ملخص الطلبات</h3><div class="three">'+number(S.order_stats.success||0,"نجحت")+number(S.order_stats.failed||0,"فشلت")+number(S.order_stats.processing||0,"قيد المعالجة")+'</div></div>';
+ return html;
+}
+function number(v,title){return '<div class="number"><strong>'+v+'</strong><span>'+title+'</span></div>'}
+function card(s){
+ var html='<div class="card"><div class="row" style="border:0;padding:0"><div><h3>🪞 '+safe(s.label)+'</h3><div class="meta" dir="ltr">'+s.id+' · '+safe(s.phone||s.source)+'</div></div>'+pill(s.status)+'</div>';
+ html+='<div class="three">'+number(s.vip===null?"—":s.vip,"💎 VIP")+number(s.free===null?"—":s.free,"🎁 Free")+number(s.points===null?"—":s.points,"✨ Points")+'</div>';
+ html+='<div class="row"><span>إجمالي الرصيد المرصود</span><b style="font-size:20px;color:'+(s.low?"#ff8791":"#38d9a3")+'">'+(s.total===null?"—":s.total)+'</b></div>';
+ html+='<div class="row"><span>آخر تحديث للرصيد</span><span class="meta">'+safe(date(s.observed_at))+'</span></div>';
+ html+='<div class="row"><span>آخر تواصل</span><span class="meta">'+safe(date(s.last_seen))+'</span></div>';
+ html+='<div class="row"><span>حد التنبيه</span><b>'+s.threshold+'</b></div>';
+ if(s.error)html+='<div class="notice error">⚠️ '+safe(s.error)+'</div>';
+ if(s.low)html+='<div class="notice">🚨 الرصيد اقترب من النفاد، يجب شحن حساب المزود.</div>';
+ html+='<div class="buttons"><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄 تحديث</button><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 تنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل شحن</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button></div>';
+ html+='<p class="note">الأرصدة مأخوذة من رسائل البوت الأصلي فقط، وليست تقديراً من اللوحة.</p></div>';return html;
+}
+function sessions(){
+ var html=headline("🪞 إدارة حسابات Telegram",S.active+" / "+S.max);
+ html+='<div class="buttons" style="margin-bottom:15px"><button class="btn primary" data-action="add">➕ إضافة حساب</button><button class="btn" data-action="reload">🔄 تحديث</button></div><div class="session-grid">';
+ S.sessions.forEach(function(s){html+=card(s)});
+ html+='</div>';
+ if(!S.sessions.length)html+='<div class="card"><p class="note">أضف حساباً باستخدام StringSession الذي تولده محلياً عبر setup_session.py.</p></div>';
+ return html;
+}
+function queue(){
+ var html=headline("⏳ الطابور والطلبات","حسب ترتيب الوصول");
+ html+='<div class="card"><h3>المنتظرون</h3>';
+ S.queue.forEach(function(q){html+='<div class="row"><b>#'+q.position+' · '+q.uid+'</b><span class="meta">طلب '+(q.order||"جلسة")+'</span></div>'});
+ html+=(S.queue.length?"":"<p class='note'>لا يوجد انتظار حاليًا.</p>")+'</div>';
+ html+='<div class="card"><h3>آخر الطلبات</h3>';
+ S.orders.forEach(function(o){html+='<div class="row"><div><b>#'+o.id+' · '+o.uid+'</b><div class="meta">'+safe(o.status)+' · '+safe(date(o.created))+'</div></div>';
+ html+=(o.status==="queued"||o.status==="processing")?'<button class="btn danger" data-action="cancel" data-id="'+o.id+'">إلغاء</button>':pill(o.status);html+='</div>'});
+ html+=(S.orders.length?"":"<p class='note'>لا توجد طلبات.</p>")+'</div>';return html;
+}
+function finance(){
+ var html=headline("💰 شحن وإدارة الأرصدة","");
+ html+='<div class="card"><h3>➕ شحن محفظة عميل DigiVerify</h3><p class="note">يضيف رصيداً للعميل داخل DigiVerify فقط.</p><form id="wallet-form"><label>Telegram User ID</label><input type="number" min="1" name="uid" placeholder="123456789" required><label>USD</label><input type="number" min="0.01" step="0.01" name="amount" required placeholder="10.00"><button type="submit" class="btn primary">تأكيد شحن العميل</button></form></div>';
+ html+='<div class="card"><h3>🧾 سجلات الشحن لدى المزود</h3>';
+ S.sessions.forEach(function(s){html+='<div class="row"><b>'+safe(s.label)+'</b><span>USD '+money(s.topup_recorded_cents)+'</span></div>'});
+ html+='<div class="notice">تسجيل شحن للحساب الأصلي يسجّل الدفع فقط، ولا يضيف أموالاً داخل البوت الأصلي. يجب تأكيد عملية الشحن من المزود أولاً.</div></div>';return html;
+}
+function settings(){
+ return headline("⚙️ الإعدادات","")+'<div class="card"><h3>📱 تثبيت التطبيق على الهاتف</h3><p class="note">Android: افتح هذه الصفحة في Chrome ثم اختر Install App أو Add to Home Screen. iPhone: افتحها في Safari ثم مشاركة → Add to Home Screen.</p><button class="btn primary" data-action="install">⬇️ تثبيت DigiVerify Control</button></div><div class="card"><h3>🔔 التنبيهات</h3><p class="note">تنبيهات قلة الرصيد وانقطاع الاتصال تصل إلى الأدمن عبر Telegram حتى عندما يكون تطبيق الهاتف مغلقًا.</p><button class="btn" data-action="notification">تفعيل إشعارات المتصفح</button></div><div class="card"><h3>🔐 إدارة الدخول</h3><p class="note">دخول الأدمن باستخدام رمز مؤقت يصدر من /panel. جلسات الحسابات محفوظة مشفرة ولا تظهر في التقرير.</p><button class="btn danger" data-action="logout">تسجيل الخروج</button></div>';
+}
+function render(){document.querySelectorAll(".nav").forEach(function(e){e.classList.toggle("active",e.dataset.tab===tab)});$("body").innerHTML=({home:home,sessions:sessions,queue:queue,finance:finance,settings:settings}[tab]||home)()}
+function alertIfNeeded(){S.sessions.forEach(function(s){if(s.low&&!lowCache[s.id]){toast("🚨 رصيد منخفض: "+s.label,true);if("Notification" in window&&Notification.permission==="granted")new Notification("DigiVerify",{body:s.label+" · "+s.total+" remaining"})}lowCache[s.id]=s.low})}
+function modal(title,inputs,callback){
+ var html='<div class="modal-bg"><div class="modal"><div class="row"><h3>'+title+'</h3><button class="btn" data-action="close">✕</button></div><form id="modalform">';
+ inputs.forEach(function(f){html+='<label>'+f.label+'</label>';if(f.textarea)html+='<textarea name="'+f.name+'" placeholder="'+safe(f.placeholder||"")+'" required></textarea>';else html+='<input name="'+f.name+'" type="'+(f.type||"text")+'" value="'+safe(f.value||"")+'" placeholder="'+safe(f.placeholder||"")+'" '+(f.required?"required":"")+' '+(f.step?'step="'+f.step+'"':"")+' '+(f.min!==undefined?'min="'+f.min+'"':"")+'>'});
+ html+='<button class="btn primary" type="submit">حفظ وتنفيذ</button></form></div></div>';$("modal").innerHTML=html;
+ $("modalform").addEventListener("submit",async function(e){e.preventDefault();var d=Object.fromEntries(new FormData(e.target));var btn=e.target.querySelector("button[type=submit]");btn.disabled=true;try{var message=await callback(d);$("modal").innerHTML="";toast(message||"✅ تم");await fetchState()}catch(err){toast(err.message,true)}finally{btn.disabled=false}});
+}
+async function action(name,id){
+ var s=S&&S.sessions.find(function(x){return String(x.id)===String(id)});
+ if(name==="add"){return modal("➕ إضافة Telegram Session",[{label:"اسم الحساب",name:"label",required:true,placeholder:"Mirror 2"},{label:"Telegram StringSession (سري)",name:"session",textarea:true}],async function(d){await api("/api/sessions","POST",d);return "✅ تم توصيل الحساب"})}
+ if(name==="refresh"){var r=await api("/api/sessions/"+id+"/refresh","POST",{});toast(r.message);return}
+ if(name==="reload"){await fetchState();return}
+ if(name==="limit"){return modal("حد تنبيه "+safe(s.label),[{label:"التنبيه عند هذا الرصيد",name:"threshold",type:"number",min:0,value:s.threshold,required:true}],async function(d){await api("/api/sessions/"+id+"/threshold","POST",{threshold:Number(d.threshold)});return "تم تعديل حد التنبيه"})}
+ if(name==="topup"){return modal("تسجيل شحن "+safe(s.label),[{label:"المبلغ المدفوع للمزود (USD)",name:"amount",type:"number",step:"0.01",min:"0.01",required:true},{label:"ملاحظة أو رقم العملية",name:"note",placeholder:"Payment reference"}],async function(d){var r=await api("/api/sessions/"+id+"/topup-note","POST",d);return r.notice})}
+ if(name==="remove"){if(!confirm("إزالة حساب "+s.label+"؟"))return;await api("/api/sessions/"+id,"DELETE",{});toast("تمت الإزالة");await fetchState();return}
+ if(name==="cancel"){if(!confirm("إلغاء الطلب #"+id+"؟"))return;await api("/api/orders/"+id+"/cancel","POST",{});toast("تم الإلغاء");await fetchState();return}
+ if(name==="close"){$("modal").innerHTML="";return}
+ if(name==="install"){if(promptInstall){promptInstall.prompt();await promptInstall.userChoice;promptInstall=null}else toast("من قائمة المتصفح اختر Add to Home Screen / Install App");return}
+ if(name==="notification"){if(!("Notification" in window))throw Error("المتصفح لا يدعم إشعارات الويب");var p=await Notification.requestPermission();toast(p==="granted"?"تم تفعيل الإشعارات":"تم رفض الإشعارات");return}
+ if(name==="logout"){await api("/api/logout","POST",{});loginView();return}
+}
+document.querySelectorAll("[data-tab]").forEach(function(n){n.addEventListener("click",function(){tab=n.dataset.tab;render();scrollTo(0,0)})});
+document.addEventListener("click",function(e){var n=e.target.closest("[data-action]");if(n)action(n.dataset.action,n.dataset.id).catch(function(err){toast(err.message,true)})});
+document.addEventListener("submit",async function(e){if(e.target.id!=="wallet-form")return;e.preventDefault();var v=Object.fromEntries(new FormData(e.target));if(!confirm("إضافة $"+v.amount+" إلى محفظة "+v.uid+"؟"))return;try{await api("/api/customers/credit","POST",v);toast("تم شحن محفظة العميل");e.target.reset();await fetchState()}catch(err){toast(err.message,true)}});
+$("login-form").addEventListener("submit",async function(e){e.preventDefault();var d=new FormData(e.target);try{var response=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({code:String(d.get("code")||"").trim()})});var v=await response.json();if(!response.ok)throw Error(v.error||"Login failed");CSRF=v.csrf;await fetchState();if(!timer)timer=setInterval(function(){fetchState().catch(console.error)},5000)}catch(err){toast(err.message,true)}});
+$("install").addEventListener("click",function(){action("install")});
+window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();promptInstall=e});
+if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(console.error);
+fetchState().then(function(){timer=setInterval(function(){fetchState().catch(console.error)},5000)}).catch(function(){loginView()});
+</script>
+</body></html>
