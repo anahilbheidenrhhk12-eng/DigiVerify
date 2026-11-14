@@ -122,6 +122,9 @@ async def setprice_command(u,c):
         con.execute("CREATE TABLE IF NOT EXISTS bot_settings(k TEXT PRIMARY KEY,v TEXT NOT NULL)")
         con.execute("INSERT OR REPLACE INTO bot_settings(k,v) VALUES('price_cents',?)",(str(cents),))
         con.commit()
+    SHOP.price=cents
+    if MIRROR:
+        for mirror in MIRROR.mirrors:mirror.price_label=price_label()
     await u.effective_message.reply_text("✅ New verification price: "+price_label()+" (successful verifications only).",reply_markup=admin_menu())
 
 def guide_text():
@@ -173,7 +176,7 @@ def catalog_text(uid):
 def verify_text(uid):
     cash,_=balance(uid)
     gate=("♾ ADMIN TEST MODE: unlimited requests, no wallet deductions." if is_admin(uid)
-          else ("✅ Your wallet is funded. Send your link now." if cash>=PRICE
+          else ("✅ Your wallet is funded. Send your link now." if cash>=current_price()
                 else f"🔒 Wallet insufficient. Top up at least {price_label()} BEFORE sending a link. Use 💰 Wallet / Top Up."))
     return f"""🎓 GOOGLE ONE AI STUDENT VERIFICATION
 ━━━━━━━━━━━━━━━━━━
@@ -285,7 +288,7 @@ async def start(u,c):
     user(uid,ref)
     if not await require_channel(u,c):return
     cash,points=balance(uid)
-    money="♾ Unlimited free administrator tests" if is_admin(uid) else f"USD {cash/100:.2f}"
+    money=f"USD {cash/100:.2f}" if recording_enabled(uid) else ("♾ Unlimited free administrator tests" if is_admin(uid) else f"USD {cash/100:.2f}")
     await u.effective_message.reply_text(
         f"""👋 WELCOME TO DIGIVERIFY! 🎓
 ━━━━━━━━━━━━━━━━━━
