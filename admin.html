@@ -107,7 +107,7 @@ function card(s){
  html+='<div class="row"><span>حد التنبيه</span><b>'+s.threshold+'</b></div>';
  if(s.error)html+='<div class="notice error">⚠️ '+safe(s.error)+'</div>';
  if(s.low)html+='<div class="notice">🚨 الرصيد اقترب من النفاد، يجب شحن حساب المزود.</div>';
- html+='<div class="buttons"><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄 تحديث</button><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 تنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل شحن</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button>'+(s.status==="disabled"&&s.source==="env"?'<button class="btn primary" data-action="enable" data-id="'+s.id+'">▶️ إعادة تفعيل</button>':'')+'</div>';
+ html+='<div class="buttons"><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄 تحديث</button><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 تنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل شحن</button><button class="btn primary" data-action="claim" data-id="'+s.id+'">🔑 شحن BEP20 عبر TxHash</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button>'+(s.status==="disabled"&&s.source==="env"?'<button class="btn primary" data-action="enable" data-id="'+s.id+'">▶️ إعادة تفعيل</button>':'')+'</div>';
  html+='<p class="note">الأرصدة مأخوذة من رسائل البوت الأصلي فقط، وليست تقديراً من اللوحة.</p></div>';return html;
 }
 function sessions(){
@@ -163,6 +163,7 @@ async function action(name,id){
  if(name==="refresh"){var r=await api("/api/sessions/"+id+"/refresh","POST",{});toast(r.message);return}
  if(name==="reload"){await fetchState();return}
  if(name==="limit"){return modal("حد تنبيه "+safe(s.label),[{label:"التنبيه عند هذا الرصيد",name:"threshold",type:"number",min:0,value:s.threshold,required:true}],async function(d){await api("/api/sessions/"+id+"/threshold","POST",{threshold:Number(d.threshold)});return "تم تعديل حد التنبيه"})}
+ if(name==="claim"){return modal("🔑 شحن BEP20 — "+safe(s.label),[{label:"TxHash للتحويل المكتمل (0x...)",name:"txhash",required:true,placeholder:"0x..."}],async function(d){if(!confirm("إرسال هذا TxHash للبوت الأصلي من الحساب "+s.label+"؟ لا يمكن استعماله مرتين."))throw Error("تم الإلغاء");var r=await api("/api/sessions/"+id+"/claim","POST",d);return r.status==="success"?"✅ أكد البوت الأصلي نجاح الشحن":r.status==="failed"?"❌ رفض البوت الأصلي المعاملة": "⏳ لم يؤكد البوت الشحن بعد؛ راجع محادثته"})}
  if(name==="topup"){return modal("تسجيل شحن "+safe(s.label),[{label:"المبلغ المدفوع للمزود (USD)",name:"amount",type:"number",step:"0.01",min:"0.01",required:true},{label:"ملاحظة أو رقم العملية",name:"note",placeholder:"Payment reference"}],async function(d){var r=await api("/api/sessions/"+id+"/topup-note","POST",d);return r.notice})}
  if(name==="enable"){await api("/api/sessions/"+id+"/enable","POST",{});toast("✅ تم إعادة الاتصال");await fetchState();return}
  if(name==="remove"){if(!confirm("إزالة حساب "+s.label+"؟"))return;await api("/api/sessions/"+id,"DELETE",{});toast("تمت الإزالة");await fetchState();return}
