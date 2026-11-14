@@ -149,13 +149,13 @@ https://services.sheerid.com/verify/...
 
 def catalog_text(uid):
     cash,pts=balance(uid)
-    credit="♾ Unlimited admin testing (FREE)" if is_admin(uid) else f"USD {format(cash/100,'.2f')} ({cash//PRICE} available verification(s))"
+    credit="♾ Unlimited admin testing (FREE)" if is_admin(uid) else f"USD {format(cash/100,'.2f')} ({cash//current_price()} available verification(s))"
     return f"""🛍 EDUCATIONAL & VERIFICATION SERVICES CATALOG
 ━━━━━━━━━━━━━━━━━━
 🎓 1. SheerID Student Verification (Google One AI Premium 5TB)
 
 • Status: 🟢 Automated submission to verification service
-• Price: {PRICE_LABEL} per SUCCESSFUL verification
+• Price: {price_label()} per SUCCESSFUL verification
 • Processing Time: Approx. 30–60 seconds; may take longer
 • Satisfaction Guarantee: FAILED or PENDING attempts NEVER DEDUCT CREDITS
 • Requirement: A fresh SheerID link for a genuinely eligible student
@@ -174,11 +174,11 @@ def verify_text(uid):
     cash,_=balance(uid)
     gate=("♾ ADMIN TEST MODE: unlimited requests, no wallet deductions." if is_admin(uid)
           else ("✅ Your wallet is funded. Send your link now." if cash>=PRICE
-                else f"🔒 Wallet insufficient. Top up at least {PRICE_LABEL} BEFORE sending a link. Use 💰 Wallet / Top Up."))
+                else f"🔒 Wallet insufficient. Top up at least {price_label()} BEFORE sending a link. Use 💰 Wallet / Top Up."))
     return f"""🎓 GOOGLE ONE AI STUDENT VERIFICATION
 ━━━━━━━━━━━━━━━━━━
 💎 Service: Google One AI Premium student verification (5TB)
-💵 Price: {PRICE_LABEL} on SUCCESS only
+💵 Price: {price_label()} on SUCCESS only
 🛡 Failed or pending attempts: ZERO CHARGE
 
 📋 HOW TO GET YOUR LINK
@@ -294,7 +294,7 @@ async def start(u,c):
 ✨ Reward Points: {points}
 ━━━━━━━━━━━━━━━━━━
 🎓 SheerID Google One AI Premium (5TB)
-💎 Price: {PRICE_LABEL} on CONFIRMED SUCCESS only
+💎 Price: {price_label()} on CONFIRMED SUCCESS only
 🛡 Failed / pending verification: ZERO CHARGE
 
 👉 Open https://one.google.com/ai-student, choose the student offer, and send your full https://services.sheerid.com/verify/... link into THIS chat.
@@ -311,7 +311,7 @@ async def wallet(u,c):
     if is_admin(uid):
         msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💎 ADMIN: ♾ UNLIMITED FREE TESTS\n💰 Wallet: USD {format(amount/100,'.2f')} (never charged for admin tests)\n✨ Reward Points: {points}"
     else:
-        msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💰 Wallet Balance: USD {format(amount/100,'.2f')}\n🎓 Price per SUCCESS: {PRICE_LABEL}\n🎟 Available verifications: {amount//PRICE}\n✨ Reward Points: {points}\n\n🔒 Customers must top up BEFORE submitting their first link.\n🛡 Failed or pending attempts do not deduct credits."
+        msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💰 Wallet Balance: USD {format(amount/100,'.2f')}\n🎓 Price per SUCCESS: {price_label()}\n🎟 Available verifications: {amount//current_price()}\n✨ Reward Points: {points}\n\n🔒 Customers must top up BEFORE submitting their first link.\n🛡 Failed or pending attempts do not deduct credits."
     msg+="\n\n💳 Use DigiVerify Top Up to add funds. Our administrator confirms payment before crediting your wallet."
     await u.effective_message.reply_text(msg)
 
@@ -327,7 +327,7 @@ async def history(u,c):
         topups=con.execute("SELECT COALESCE(SUM(amount),0) AS amount FROM ledger WHERE uid=? AND amount>0",(uid,)).fetchone()["amount"]
         rows=con.execute("SELECT id,status FROM orders WHERE uid=? ORDER BY id DESC LIMIT 7",(uid,)).fetchall()
         recent=con.execute("SELECT amount,created FROM ledger WHERE uid=? AND amount>0 ORDER BY id DESC LIMIT 3",(uid,)).fetchall()
-    wallet_text="♾ Unlimited admin testing — FREE" if is_admin(uid) else f"USD {format(cash/100,'.2f')} ({cash//PRICE} verifications)"
+    wallet_text="♾ Unlimited admin testing — FREE" if is_admin(uid) else f"USD {format(cash/100,'.2f')} ({cash//current_price()} verifications)"
     msg=f"""📋 CUSTOMER ACCOUNT & WALLET SUMMARY
 ━━━━━━━━━━━━━━━━━━
 👤 Customer: {u.effective_user.first_name}
@@ -457,9 +457,9 @@ async def intake(u,c):
         pending=con.execute("SELECT 1 FROM orders WHERE uid=? AND status IN ('queued','processing')",(uid,)).fetchone()
         if pending:
             con.rollback(); await u.message.reply_text("You already have an active request."); return
-        if not is_admin(uid) and current<PRICE:
+        if not is_admin(uid) and current<current_price():
             con.rollback()
-            await u.message.reply_text(f"🔒 WALLET TOP-UP REQUIRED\n\n🎓 Price: {PRICE_LABEL}\n💰 Your balance: USD {format(current/100,'.2f')}\n\nPlease add funds to your wallet BEFORE submitting a verification link. Tap 💰 Wallet / Top Up or contact support.\n🛡 Failed orders do not deduct credits.",reply_markup=menu())
+            await u.message.reply_text(f"🔒 WALLET TOP-UP REQUIRED\n\n🎓 Price: {price_label()}\n💰 Your balance: USD {format(current/100,'.2f')}\n\nPlease add funds to your wallet BEFORE submitting a verification link. Tap 💰 Wallet / Top Up or contact support.\n🛡 Failed orders do not deduct credits.",reply_markup=menu())
             return
         cur=con.execute("INSERT INTO orders(uid,url,status,created) VALUES (?,?,?,?)",(uid,url,"queued",int(time.time())))
         oid=cur.lastrowid
@@ -478,12 +478,12 @@ async def intake(u,c):
             with closing(db()) as con:
                 con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
                 con.commit()
-            await u.message.reply_text(f"📨 Request #{oid} sent to DigiVerify processing. Your verification result will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 DigiVerify admin test #{oid} started. Results will appear here. Free admin test.")
+            await u.message.reply_text(f"📨 Request #{oid} sent to DigiVerify processing. Your verification result will appear here.\n🛡 DigiVerify will charge {price_label()} only after confirmed success." if not is_admin(uid) else f"📨 DigiVerify admin test #{oid} started. Results will appear here. Free admin test.")
         else:
             await u.message.reply_text(f"⏳ Request #{oid} queued. Your position: #{MIRROR.position(uid)}. It will start automatically when a mirror becomes free. No charge while waiting.")
         return
     await Q.put((oid,uid,url))
-    await u.message.reply_text(f"💎 VERIFICATION REQUEST QUEUED\n━━━━━━━━━━━━━━━━━━\n🆔 Order #{oid}\n⏳ Waiting for processing.\n"+("♾ Admin test: FREE — no wallet deduction." if is_admin(uid) else f"💰 {PRICE_LABEL} charged only on SUCCESS."))
+    await u.message.reply_text(f"💎 VERIFICATION REQUEST QUEUED\n━━━━━━━━━━━━━━━━━━\n🆔 Order #{oid}\n⏳ Waiting for processing.\n"+("♾ Admin test: FREE — no wallet deduction." if is_admin(uid) else f"💰 {price_label()} charged only on SUCCESS."))
 
 def finish(oid,status,detail=""):
     with closing(db()) as con:
@@ -494,9 +494,9 @@ def finish(oid,status,detail=""):
         if row["status"] in ("success","failed","review","cancelled"):
             con.rollback(); return row["status"]
         if status=="success" and not is_admin(row["uid"]):
-            changed=con.execute("UPDATE users SET balance=balance-? WHERE uid=? AND balance>=?",(PRICE,row["uid"],PRICE))
+            changed=con.execute("UPDATE users SET balance=balance-? WHERE uid=? AND balance>=?",(current_price(),row["uid"],current_price()))
             if not changed.rowcount: status="review"; detail="Insufficient balance at settlement"
-            else: con.execute("INSERT INTO ledger(uid,amount,reason,created) VALUES (?,?,?,?)",(row["uid"],-PRICE,"Verification #"+str(oid),int(time.time())))
+            else: con.execute("INSERT INTO ledger(uid,amount,reason,created) VALUES (?,?,?,?)",(row["uid"],-current_price(),"Verification #"+str(oid),int(time.time())))
         con.execute("UPDATE orders SET status=?,result=? WHERE id=?",(status,detail,oid))
         con.commit(); return status
 
@@ -545,7 +545,7 @@ async def worker(app):
                         if outcome: break
                     if outcome=="success":
                         status=finish(oid,"success",detail)
-                        if status=="success": await app.bot.send_message(uid,"🎉 VERIFICATION SUCCESSFUL! 🎉\n━━━━━━━━━━━━━━━━━━\n🔗 Google One AI (5TB) Activation Link:\n"+detail+"\n\n✨ Congratulations! Click the link above to activate your student discount.\n"+("♾ Admin test — ZERO wallet deductions." if is_admin(uid) else "💎 Credit used: "+PRICE_LABEL))
+                        if status=="success": await app.bot.send_message(uid,"🎉 VERIFICATION SUCCESSFUL! 🎉\n━━━━━━━━━━━━━━━━━━\n🔗 Google One AI (5TB) Activation Link:\n"+detail+"\n\n✨ Congratulations! Click the link above to activate your student discount.\n"+("♾ Admin test — ZERO wallet deductions." if is_admin(uid) else "💎 Credit used: "+price_label()))
                         elif status!="cancelled": await app.bot.send_message(uid,"⚠️ Result needs admin review. No balance deducted.")
                     elif outcome=="failed":
                         status=finish(oid,"failed")
@@ -748,7 +748,7 @@ async def init(app):
                     await client.disconnect()
                     logging.warning("Mirror account %s disabled from mobile panel",aid)
                     continue
-                mirror=ProviderMirror(client,PROVIDER,app,finish,classify,is_admin,PRICE_LABEL,
+                mirror=ProviderMirror(client,PROVIDER,app,finish,classify,is_admin,price_label(),
                     session_ttl=int(os.getenv("MIRROR_SESSION_TTL","300")),
                     result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360")))
                 mirror.account_id=aid
