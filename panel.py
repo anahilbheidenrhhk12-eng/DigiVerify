@@ -664,23 +664,28 @@ class AdminPanel:
                 m.mute_until=time.monotonic()+130
                 async def latest():
                     return await m.client.get_messages(m.peer,limit=12)
-                async def button(parts):
+                async def button(parts,after):
                     for msg in await latest():
+                        if msg.id<=after: continue
                         if msg.out: continue
                         for i,line in enumerate(msg.buttons or []):
                             for j,b in enumerate(line):
                                 if any(p in (getattr(b,"text","") or "").lower() for p in parts):
                                     return msg,i,j
                     raise RuntimeError("Expected provider button not found")
+                initial=await latest()
+                after=max((x.id for x in initial),default=0)
                 await m.client.send_message(m.peer,"/start")
                 await asyncio.sleep(3)
-                msg,i,j=await button(["top up","topup","buy credits"])
+                msg,i,j=await button(["top up","topup","buy credits"],after)
+                after=msg.id
                 await msg.click(i,j)
                 await asyncio.sleep(3)
-                msg,i,j=await button(["binance pay","bep20"])
+                msg,i,j=await button(["binance pay","bep20"],after)
+                after=msg.id
                 await msg.click(i,j)
                 await asyncio.sleep(3)
-                msg,i,j=await button(["enter txid","txhash","claim automatically"])
+                msg,i,j=await button(["enter txid","txhash","claim automatically"],after)
                 await msg.click(i,j)
                 await asyncio.sleep(2)
                 previous=await latest()
