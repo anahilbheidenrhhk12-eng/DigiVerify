@@ -131,6 +131,32 @@ https://services.sheerid.com/verify/...
 
 {gate}"""
 
+LANGUAGES={"en":"🇬🇧 English","ar":"🇸🇦 العربية","fr":"🇫🇷 Français","vi":"🇻🇳 Tiếng Việt","es":"🇪🇸 Español","pt":"🇧🇷 Português","tr":"🇹🇷 Türkçe","ru":"🇷🇺 Русский","id":"🇮🇩 Bahasa Indonesia"}
+TRANSLATIONS={
+"ar":["شحن الرصيد","الخدمات التعليمية","السجل والرصيد","كود الخصم","دعوة الأصدقاء","مجموعة الدعم","المساعدة","تغيير اللغة","التحقق من الطالب"],
+"fr":["Recharger","Services éducatifs","Historique et solde","Code promo","Inviter des amis","Groupe d'assistance","Aide","Changer de langue","Vérifier étudiant"],
+"vi":["Nạp tiền","Dịch vụ giáo dục","Lịch sử và số dư","Mã khuyến mãi","Mời bạn bè","Nhóm hỗ trợ","Trợ giúp","Đổi ngôn ngữ","Xác minh sinh viên"],
+"es":["Recargar","Servicios educativos","Historial y saldo","Código promo","Invitar amigos","Grupo de soporte","Ayuda","Cambiar idioma","Verificar estudiante"],
+"pt":["Recarregar","Serviços educacionais","Histórico e saldo","Código promo","Convidar amigos","Grupo de suporte","Ajuda","Mudar idioma","Verificar estudante"],
+"tr":["Bakiye yükle","Eğitim hizmetleri","Geçmiş ve bakiye","Promosyon kodu","Arkadaş davet et","Destek grubu","Yardım","Dili değiştir","Öğrenci doğrula"],
+"ru":["Пополнить","Образовательные услуги","История и баланс","Промокод","Пригласить друзей","Группа поддержки","Помощь","Изменить язык","Проверить студента"],
+"id":["Isi saldo","Layanan pendidikan","Riwayat dan saldo","Kode promo","Undang teman","Grup dukungan","Bantuan","Ganti bahasa","Verifikasi siswa"]}
+def language_for(uid):
+    with closing(db()) as con:
+        con.execute("CREATE TABLE IF NOT EXISTS user_languages(uid INTEGER PRIMARY KEY,language TEXT NOT NULL DEFAULT 'en')")
+        r=con.execute("SELECT language FROM user_languages WHERE uid=?",(uid,)).fetchone()
+    return r["language"] if r and r["language"] in LANGUAGES else "en"
+def language_keyboard():
+    items=list(LANGUAGES.items())
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label,callback_data="lang:"+key) for key,label in items[i:i+2]] for i in range(0,len(items),2)])
+def customer_menu(uid):
+    base=["Top Up / Buy Credits","Edu Services","History & Balance","Promo Code","Invite Friends","Support Group","Help & Guide","Change Language","Verify Student"]
+    names=TRANSLATIONS.get(language_for(uid),base)
+    actions=["topup","services","history","promo","invite","support","help","language","verify"]
+    icons=["💰","🛍","📋","🎟","👥","💬","💬","🌐","🎓"]
+    buttons=[InlineKeyboardButton(icons[i]+" "+names[i],callback_data=actions[i]) for i in range(9)]
+    return InlineKeyboardMarkup([buttons[0:2],buttons[2:4],buttons[4:6],buttons[6:8],[buttons[8]]])
+
 def menu():
     return InlineKeyboardMarkup([
        [InlineKeyboardButton("💰 Top Up / Buy Credits",callback_data="topup"),InlineKeyboardButton("🛍 Edu Services",callback_data="services")],
@@ -213,7 +239,7 @@ async def start(u,c):
 👉 Open https://one.google.com/ai-student, choose the student offer, and send your full https://services.sheerid.com/verify/... link into THIS chat.
 
 💳 DigiVerify Top Up charges only your DigiVerify wallet, never the original bot.""",
-        reply_markup=menu(),disable_web_page_preview=True)
+        reply_markup=customer_menu(uid),disable_web_page_preview=True)
     if is_admin(uid):
         await u.effective_message.reply_text("🛠 DIGIVERIFY ADMIN CONTROLS",reply_markup=admin_menu())
 
@@ -310,7 +336,16 @@ async def callback(u,c):
     if action=="help":
         await q.message.reply_text(guide_text(),reply_markup=SHOP.support_keyboard(),disable_web_page_preview=True);return
     if action=="language":
-        await q.message.reply_text("🌐 DigiVerify currently supports English.",reply_markup=menu());return
+        await q.message.reply_text("🌐 Choose your language / اختر لغتك:",reply_markup=language_keyboard());return
+    if action.startswith("lang:"):
+        lang=action.split(":",1)[1]
+        if lang not in LANGUAGES:return
+        with closing(db()) as con:
+            con.execute("CREATE TABLE IF NOT EXISTS user_languages(uid INTEGER PRIMARY KEY,language TEXT NOT NULL DEFAULT 'en')")
+            con.execute("INSERT OR REPLACE INTO user_languages(uid,language) VALUES(?,?)",(uid,lang))
+            con.commit()
+        await q.message.reply_text("✅ "+LANGUAGES[lang],reply_markup=customer_menu(uid))
+        return
     if action=="verify":msg=verify_text(uid)
     elif action=="invite":
         me=await c.bot.get_me()
