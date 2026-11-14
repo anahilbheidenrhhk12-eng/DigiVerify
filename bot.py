@@ -295,13 +295,13 @@ async def intake(u,c):
             accepted=False
         if not accepted:
             finish(oid,"review","Upstream account busy or unavailable, request not submitted")
-            await u.message.reply_text("⚠️ The original bot was not available. The request was not submitted, and your wallet was not charged.")
+            await u.message.reply_text("⚠️ DigiVerify processing is temporarily unavailable. No balance was deducted.")
             return
         if accepted=="processing":
             with closing(db()) as con:
                 con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
                 con.commit()
-            await u.message.reply_text(f"📨 Request #{oid} sent to DigiVerify processing. Your verification result will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. Verification results will appear here. Free admin test.")
+            await u.message.reply_text(f"📨 Request #{oid} sent to DigiVerify processing. Your verification result will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 DigiVerify admin test #{oid} started. Results will appear here. Free admin test.")
         else:
             await u.message.reply_text(f"⏳ Request #{oid} queued. Your position: #{MIRROR.position(uid)}. It will start automatically when a mirror becomes free. No charge while waiting.")
         return
@@ -487,7 +487,7 @@ async def release_command(u,c):
         await u.effective_message.reply_text("Provider mirror is offline.")
         return
     ok=await MIRROR.release(u.effective_user.id)
-    await u.effective_message.reply_text("✅ Original bot session released. Another customer can use it now." if ok else "⚠️ No idle session to release. Wait for the active verification to finish.")
+    await u.effective_message.reply_text("✅ DigiVerify processing session released. Another customer can use it now." if ok else "⚠️ No idle session to release. Wait for the active verification to finish.")
 
 async def whoami(u,c):
     await u.message.reply_text("Your Telegram ID: "+str(u.effective_user.id))
