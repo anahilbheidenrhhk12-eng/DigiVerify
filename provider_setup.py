@@ -71,7 +71,7 @@ async def setup_provider_account(client,provider):
             else:
                 await client(JoinChannelRequest(path))
         except Exception as exc:
-            if "ALREADY_PARTICIPANT" not in str(exc).upper() and "USER_ALREADY_PARTICIPANT" not in str(exc).upper():
+            if "ALREADY_PARTICIPANT" not in str(exc).upper() and "USER_ALREADY_PARTICIPANT" not in str(exc).upper() and type(exc).__name__!="UserAlreadyParticipantError":
                 return False,"Provider group join failed: "+type(exc).__name__+" "+str(exc)[:90]
     await client.send_message(peer,"/start")
     await asyncio.sleep(2)
