@@ -572,6 +572,9 @@ class AdminPanel:
                 if mirror.active_order is not None or mirror in pool.owners.values():
                     return web.json_response({"error":"Account is busy. Finish current customer first."},status=409)
                 pool.mirrors.remove(mirror)
+                if row["source"]=="env":
+                    # Keep original environment session in memory for immediate re-enable.
+                    self.disabled_env[aid]=mirror.client.session.save()
                 await mirror.stop()
                 await mirror.client.disconnect()
                 if mirror.client in self.app.bot_data.get("mirror_clients",[]):
