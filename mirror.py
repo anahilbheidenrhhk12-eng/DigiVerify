@@ -45,6 +45,7 @@ class ProviderMirror:
         self.sent = {}
         self.mute_until = 0
         self.on_terminal = None
+        self.observed_callback = None
 
     async def start(self):
         self.peer = await self.client.get_entity(self.provider_name)
@@ -221,6 +222,9 @@ class ProviderMirror:
     async def _deliver(self, msg, edited=False):
         if not msg or getattr(msg,"out",False):
             return
+        if self.observed_callback is not None:
+            try: await self.observed_callback(self,msg)
+            except Exception: LOG.exception("Cannot update upstream wallet telemetry")
         uid=self.owner
         if uid is None or time.monotonic() >= self.lease_until or time.monotonic() < self.mute_until:
             return
