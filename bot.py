@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from decimal import Decimal
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeChat
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from mirror import ProviderMirror
@@ -140,7 +141,12 @@ def menu():
     ])
 
 def admin_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Order",callback_data="admin_cancel_help"),InlineKeyboardButton("👤 Add Admin",callback_data="admin_add_help")],[InlineKeyboardButton("📋 Orders",callback_data="admin_orders")]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Live Dashboard",callback_data="admin_dashboard"),InlineKeyboardButton("🪞 Sessions",callback_data="admin_sessions")],
+        [InlineKeyboardButton("📋 Orders",callback_data="admin_orders"),InlineKeyboardButton("💰 Top-ups",callback_data="admin_topups")],
+        [InlineKeyboardButton("🛑 Cancel Order",callback_data="admin_cancel_help"),InlineKeyboardButton("👤 Add Admin",callback_data="admin_add_help")],
+        [InlineKeyboardButton("⚙️ Admin Commands",callback_data="admin_commands"),InlineKeyboardButton("🏠 Customer Menu",callback_data="home")]
+    ])
 
 
 def channel_gate_keyboard():
@@ -275,12 +281,21 @@ async def callback(u,c):
     if action.startswith("admin_"):
         if not is_admin(uid):
             await q.message.reply_text("⛔ Admin access required.");return
+        if action=="admin_dashboard":
+            return await panel_command(u,c)
+        if action=="admin_sessions":
+            return await sessions_command(u,c)
+        if action=="admin_topups":
+            return await SHOP.pending(u,c)
+        if action=="admin_commands":
+            msg="⚙️ ADMIN COMMANDS\\n/panel — mobile control\\n/sessions — sessions & queue\\n/orders — recent orders\\n/topups — pending payments\\n/cancel ORDER_ID\\n/addadmin USER_ID\\n/admins — admins\\n/credit USER_ID AMOUNT\\n/setchannel @channel\\n/setpayment ADDRESS"
+            await q.message.reply_text(msg,reply_markup=admin_menu());return
         if action=="admin_cancel_help":msg="🛑 To cancel an order: /cancel ORDER_ID."
         elif action=="admin_add_help":msg="👤 To add an admin: /addadmin TELEGRAM_USER_ID."
         elif action=="admin_orders":return await orders(u,c)
         else:msg="Unknown admin action."
         await q.message.reply_text(msg);return
-    if action=="home":return await start(u,c)
+    if action=="admin_home":\n        if is_admin(uid):await q.message.reply_text("🛠 Admin Control Center",reply_markup=admin_menu())\n        return\n    if action=="home":return await start(u,c)
     if action in ("topup","wallet"):return await SHOP.topup(u,c)
     if action=="history":return await history(u,c)
     if action=="support":return await SHOP.support(u,c)
@@ -569,23 +584,22 @@ async def init(app):
         await app.bot.set_my_short_description(
             "🎓 Student verification • $2.50 on success • no charge on failure."
         )
-        await app.bot.set_my_commands([
-            ("start","Open main menu"),
-            ("services","Product description and catalog"),
-            ("guide","How to get and submit a SheerID link"),
-            ("verify","Start a verification request"),
-            ("balance","Wallet balance and top-up"),
-            ("history","Your recent verifications"),
-            ("topup","Add funds to DigiVerify wallet"),
-            ("support","DigiVerify support and community"),
-            ("whoami","Your Telegram numeric ID"),
-            ("done","Release upstream chat for the next customer"),
-            ("sessions","Admin: mirror pool and queue status"),
-            ("panel","Admin: mobile control app login"),
-            ("cancel","Admin: cancel a queued order"),
-            ("addadmin","Admin: grant admin access"),
-            ("admins","Admin: list administrators"),
-        ])
+        public_commands=[
+            BotCommand("start","Open main menu"),BotCommand("services","Product catalog"),
+            BotCommand("guide","How verification works"),BotCommand("verify","Verify student"),
+            BotCommand("balance","Wallet balance"),BotCommand("history","Order history"),
+            BotCommand("topup","Add wallet funds"),BotCommand("support","Contact support")]
+        admin_commands=public_commands+[
+            BotCommand("panel","Admin mobile dashboard"),BotCommand("sessions","Session pool"),
+            BotCommand("orders","Recent orders"),BotCommand("topups","Payment review"),
+            BotCommand("cancel","Cancel order"),BotCommand("addadmin","Add administrator"),
+            BotCommand("admins","List administrators"),BotCommand("credit","Credit wallet"),
+            BotCommand("setchannel","Required channel"),BotCommand("setpayment","Payment address")]
+        await app.bot.set_my_commands(public_commands,scope=BotCommandScopeAllPrivateChats())
+        for admin_id in shop_admin_ids():
+            try:
+                await app.bot.set_my_commands(admin_commands,scope=BotCommandScopeChat(chat_id=admin_id))
+            except Exception:logging.warning("Could not set private commands for admin %s",admin_id)
     except Exception:
         logging.exception("Unable to update Telegram bot profile")
 
