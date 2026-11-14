@@ -56,7 +56,7 @@ input,textarea{font-size:16px;max-width:100%}
  .bar{padding-inline:5px}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-.pay-flow{display:grid;gap:12px}.pay-step{border:1px solid #385373;background:#102038;border-radius:15px;padding:14px}.pay-step strong{display:block;margin-bottom:8px}.pay-address{direction:ltr;text-align:left;overflow-wrap:anywhere;user-select:all;background:#0a1729;border:1px dashed #7299c8;border-radius:11px;padding:13px;font-size:14px;line-height:1.7;color:#cde2ff}.pay-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pay-actions .btn{min-height:48px}.pay-actions .wide{grid-column:1/-1}.pay-badge{display:inline-block;background:#173e39;color:#64e2b8;padding:5px 10px;border-radius:20px;font-size:12px;margin-bottom:10px}.pay-link{display:block;text-align:center;text-decoration:none;padding:13px;border-radius:11px;background:#27456a;color:#fff;font-weight:700}.pay-step p{color:#b3c6df;line-height:1.7;margin:5px 0 12px}</style>
+.pay-flow{display:grid;gap:12px}.pay-step{border:1px solid #385373;background:#102038;border-radius:15px;padding:14px}.pay-step strong{display:block;margin-bottom:8px}.pay-address{direction:ltr;text-align:left;overflow-wrap:anywhere;user-select:all;background:#0a1729;border:1px dashed #7299c8;border-radius:11px;padding:13px;font-size:14px;line-height:1.7;color:#cde2ff}.pay-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pay-actions .btn{min-height:48px}.pay-actions .wide{grid-column:1/-1}.pay-badge{display:inline-block;background:#173e39;color:#64e2b8;padding:5px 10px;border-radius:20px;font-size:12px;margin-bottom:10px}.pay-link{display:block;text-align:center;text-decoration:none;padding:13px;border-radius:11px;background:#27456a;color:#fff;font-weight:700}.pay-step p{color:#b3c6df;line-height:1.7;margin:5px 0 12px}.compact-card{padding:11px 12px!important;margin:7px 0!important}.compact-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.compact-name{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.compact-stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.compact-stats span{padding:5px 9px;border-radius:9px;background:#0e1b2d;font-size:12px}.compact-actions{display:flex;gap:6px;margin-top:9px}.compact-actions .btn{flex:1;padding:7px;min-height:38px}.compact-details{margin-top:10px;border-top:1px solid var(--line);padding-top:9px}.compact-details .row{padding:6px 0}.finance-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.finance-summary .stat{padding:11px}.finance-summary strong{font-size:20px}.filter-tabs{display:flex;gap:7px;overflow-x:auto;margin:8px 0}.filter-tabs .btn{white-space:nowrap;min-height:36px;padding:7px 11px}.filter-tabs .selected{border-color:#7ab5ff;background:#31517b}</style>
 </head>
 <body>
 <div id="login" class="login-page">
@@ -76,7 +76,7 @@ input,textarea{font-size:16px;max-width:100%}
 </div><div id="modal"></div><div class="toast hide" id="toast"></div>
 <script>
 "use strict";
-var S=null,CSRF="",tab="home",timer=null,promptInstall=null,lowCache={};
+var S=null,CSRF="",tab="home",timer=null,promptInstall=null,lowCache={},sessionFilter="all",sessionSearch="";
 function $(id){return document.getElementById(id)}
 function safe(x){return String(x===null||x===undefined?"":x).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
 var PROVIDER_BEP20="0x1e3e1cd126071d509a41a4f71ad2b4f142477a79";
@@ -130,24 +130,28 @@ function home(){
 }
 function number(v,title){return '<div class="number"><strong>'+v+'</strong><span>'+title+'</span></div>'}
 function card(s){
- var html='<div class="card"><div class="row" style="border:0;padding:0"><div><h3>🪞 '+safe(s.label)+'</h3><div class="meta" dir="ltr">'+s.id+' · '+safe(s.phone||s.source)+'</div></div>'+pill(s.status)+'</div>';
- html+='<div class="three">'+number(s.vip===null?"—":s.vip,"💎 VIP")+number(s.free===null?"—":s.free,"🎁 Free")+number(s.points===null?"—":s.points,"✨ Points")+'</div>';
- html+='<div class="row"><span>إجمالي الرصيد المرصود</span><b style="font-size:20px;color:'+(s.low?"#ff8791":"#38d9a3")+'">'+(s.total===null?"—":s.total)+'</b></div>';
- html+='<div class="row"><span>آخر تحديث للرصيد</span><span class="meta">'+safe(date(s.observed_at))+'</span></div>';
- html+='<div class="row"><span>آخر تواصل</span><span class="meta">'+safe(date(s.last_seen))+'</span></div>';
- html+='<div class="row"><span>حد التنبيه</span><b>'+s.threshold+'</b></div>';
- if(s.error)html+='<div class="notice error">⚠️ '+safe(s.error)+'</div>';
- if(s.low)html+='<div class="notice">🚨 الرصيد اقترب من النفاد، يجب شحن حساب المزود.</div>';
- html+='<div class="buttons"><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄 تحديث</button><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 تنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل شحن</button><button class="btn primary" data-action="claim" data-id="'+s.id+'">🔑 شحن BEP20 عبر TxHash</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button>'+(s.status==="disabled"&&s.source==="env"?'<button class="btn primary" data-action="enable" data-id="'+s.id+'">▶️ إعادة تفعيل</button>':'')+'</div>';
- html+='<p class="note">الأرصدة مأخوذة من رسائل البوت الأصلي فقط، وليست تقديراً من اللوحة.</p></div>';return html;
+ var total=s.total===null?"—":s.total;
+ var h='<div class="card compact-card"><div class="compact-top"><span class="compact-name">🪞 '+safe(s.label)+'</span>'+pill(s.status)+'</div>';
+ h+='<div class="meta" dir="ltr">'+safe(s.phone||s.source)+' · #'+s.id+'</div>';
+ h+='<div class="compact-stats"><span>💎 '+(s.vip===null?"—":s.vip)+'</span><span>🎁 '+(s.free===null?"—":s.free)+'</span><span>✨ '+(s.points===null?"—":s.points)+'</span><span style="color:'+(s.low?"#ff8791":"#38d9a3")+'">📊 '+total+'</span></div>';
+ h+='<div class="compact-actions"><button class="btn" data-action="details" data-id="'+s.id+'">☰ التفاصيل</button><button class="btn primary" data-action="claim" data-id="'+s.id+'">💳 شحن</button><button class="btn" data-action="refresh" data-id="'+s.id+'" '+(s.status!=="online"?"disabled":"")+'>🔄</button></div>';
+ h+='<div class="compact-details hide" id="details-'+s.id+'"><div class="row"><span>آخر رصيد</span><span class="meta">'+safe(date(s.observed_at))+'</span></div><div class="row"><span>آخر اتصال</span><span class="meta">'+safe(date(s.last_seen))+'</span></div><div class="row"><span>حد التنبيه</span><b>'+s.threshold+'</b></div>';
+ if(s.error)h+='<div class="notice error">⚠️ '+safe(s.error)+'</div>';
+ if(s.setup_message)h+='<div class="note">⚙️ '+safe(s.setup_message)+'</div>';
+ h+='<div class="buttons"><button class="btn" data-action="limit" data-id="'+s.id+'">🔔 حد التنبيه</button><button class="btn" data-action="topup" data-id="'+s.id+'">🧾 تسجيل دفع</button><button class="btn danger" data-action="remove" data-id="'+s.id+'" '+(s.status==="processing"||s.status==="in-use"?"disabled":"")+'>🗑 إزالة</button>'+(s.status==="disabled"&&s.source==="env"?'<button class="btn primary" data-action="enable" data-id="'+s.id+'">▶️ تفعيل</button>':'')+'</div></div></div>';
+ return h;
 }
 function sessions(){
- var html=headline("🪞 إدارة حسابات Telegram",S.active+" / "+S.max);
- html+='<div class="buttons" style="margin-bottom:15px"><button class="btn primary" data-action="addphone">📱 إضافة رقم Telegram</button><button class="btn" data-action="add">🔐 إضافة Session String</button><button class="btn" data-action="reload">🔄 تحديث</button></div><div class="session-grid">';
- S.sessions.forEach(function(s){html+=card(s)});
- html+='</div>';
- if(!S.sessions.length)html+='<div class="card"><p class="note">أضف حساباً باستخدام StringSession الذي تولده محلياً عبر setup_session.py.</p></div>';
- return html;
+ var all=S.sessions||[],online=all.filter(function(s){return s.status==="online"}).length,failed=all.filter(function(s){return s.status==="setup_failed"||s.status==="offline"}).length;
+ var h=headline("🪞 الجلسات",all.length+" / "+S.max);
+ h+='<div class="compact-stats"><span>🟢 '+online+' متصل</span><span>🔴 '+failed+' يحتاج متابعة</span><span>⏳ '+S.queue.length+' انتظار</span></div>';
+ h+='<div class="buttons"><button class="btn primary" data-action="addphone">📱 رقم جديد</button><button class="btn" data-action="add">🔐 Session</button><button class="btn" data-action="reload">🔄 تحديث</button></div>';
+ h+='<input id="session-search" placeholder="🔎 البحث باسم الجلسة أو الرقم" value="'+safe(sessionSearch)+'">';
+ h+='<div class="filter-tabs">'+[["all","الكل"],["online","متصل"],["busy","مشغول"],["issues","مشاكل"]].map(function(x){return '<button class="btn '+(sessionFilter===x[0]?"selected":"")+'" data-action="filter-sessions" data-filter="'+x[0]+'">'+x[1]+'</button>'}).join("")+'</div><div class="session-grid">';
+ var list=all.filter(function(s){var q=sessionSearch.toLowerCase();if(q&&!((s.label||"")+" "+(s.phone||"")+" "+s.id).toLowerCase().includes(q))return false;return sessionFilter==="all"||(sessionFilter==="online"&&s.status==="online")||(sessionFilter==="busy"&&(s.status==="processing"||s.status==="in-use"))||(sessionFilter==="issues"&&(s.status==="setup_failed"||s.status==="offline"||s.low))});
+ list.forEach(function(s){h+=card(s)});h+='</div>';
+ if(!list.length)h+='<div class="card"><p class="note">لا توجد جلسات تطابق البحث.</p></div>';
+ return h;
 }
 function queue(){
  var html=headline("⏳ الطابور والطلبات","حسب ترتيب الوصول");
@@ -193,6 +197,8 @@ async function action(name,id){
  if(name==="add"){return modal("➕ إضافة Telegram Session",[{label:"اسم الحساب",name:"label",required:true,placeholder:"Mirror 2"},{label:"Telegram StringSession (سري)",name:"session",textarea:true}],async function(d){await api("/api/sessions","POST",d);return "✅ تم توصيل الحساب"})}
  if(name==="refresh"){var r=await api("/api/sessions/"+id+"/refresh","POST",{});toast(r.message);return}
  if(name==="copy-wallet"){var a=PROVIDER_BEP20;try{await navigator.clipboard.writeText(a);toast("✅ تم نسخ عنوان BEP20")}catch(e){var t=document.createElement("textarea");t.value=a;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove();toast("تم نسخ العنوان")}return}
+ if(name==="details"){var el=$("details-"+id);if(el)el.classList.toggle("hide");return}
+ if(name==="filter-sessions"){sessionFilter=id;render();return}
  if(name==="reload"){await fetchState();return}
  if(name==="limit"){return modal("حد تنبيه "+safe(s.label),[{label:"التنبيه عند هذا الرصيد",name:"threshold",type:"number",min:0,value:s.threshold,required:true}],async function(d){await api("/api/sessions/"+id+"/threshold","POST",{threshold:Number(d.threshold)});return "تم تعديل حد التنبيه"})}
  if(name==="claim"){return providerPayment(id)}
@@ -207,7 +213,8 @@ async function action(name,id){
  if(name==="logout"){await api("/api/logout","POST",{});loginView();return}
 }
 document.querySelectorAll("[data-tab]").forEach(function(n){n.addEventListener("click",function(){tab=n.dataset.tab;render();scrollTo(0,0)})});
-document.addEventListener("click",function(e){var n=e.target.closest("[data-action]");if(n)action(n.dataset.action,n.dataset.id).catch(function(err){toast(err.message,true)})});
+document.addEventListener("click",function(e){var n=e.target.closest("[data-action]");if(n)action(n.dataset.action,n.dataset.action==="filter-sessions"?n.dataset.filter:n.dataset.id).catch(function(err){toast(err.message,true)})});
+document.addEventListener("input",function(e){if(e.target.id==="session-search"){sessionSearch=e.target.value;var pos=e.target.selectionStart;render();var el=$("session-search");el.focus();el.setSelectionRange(pos,pos)}});
 document.addEventListener("submit",async function(e){if(e.target.id!=="wallet-form")return;e.preventDefault();var v=Object.fromEntries(new FormData(e.target));if(!confirm("إضافة $"+v.amount+" إلى محفظة "+v.uid+"؟"))return;try{await api("/api/customers/credit","POST",v);toast("تم شحن محفظة العميل");e.target.reset();await fetchState()}catch(err){toast(err.message,true)}});
 $("login-form").addEventListener("submit",async function(e){e.preventDefault();var d=new FormData(e.target);try{var response=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({code:String(d.get("code")||"").trim()})});var v=await response.json();if(!response.ok)throw Error(v.error||"Login failed");CSRF=v.csrf;await fetchState();if(!timer)timer=setInterval(function(){fetchState().catch(console.error)},5000)}catch(err){toast(err.message,true)}});
 $("install").addEventListener("click",function(){action("install")});
