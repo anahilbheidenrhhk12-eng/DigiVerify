@@ -27,7 +27,7 @@ class MirrorPool:
     def _available(self):
         assigned=set(self.owners.values())
         for m in self.mirrors:
-            if m not in assigned and m.client.is_connected() and m.may_start(-1):
+            if m not in assigned and getattr(m,"healthy",True) and m.client.is_connected() and m.may_start(-1):
                 return m
         return None
 
