@@ -288,14 +288,17 @@ async def callback(u,c):
         if action=="admin_topups":
             return await SHOP.pending(u,c)
         if action=="admin_commands":
-            msg="⚙️ ADMIN COMMANDS\\n/panel — mobile control\\n/sessions — sessions & queue\\n/orders — recent orders\\n/topups — pending payments\\n/cancel ORDER_ID\\n/addadmin USER_ID\\n/admins — admins\\n/credit USER_ID AMOUNT\\n/setchannel @channel\\n/setpayment ADDRESS"
+            msg="⚙️ ADMIN COMMANDS\n/panel — mobile control\\n/sessions — sessions & queue\\n/orders — recent orders\\n/topups — pending payments\\n/cancel ORDER_ID\\n/addadmin USER_ID\\n/admins — admins\\n/credit USER_ID AMOUNT\\n/setchannel @channel\\n/setpayment ADDRESS"
             await q.message.reply_text(msg,reply_markup=admin_menu());return
         if action=="admin_cancel_help":msg="🛑 To cancel an order: /cancel ORDER_ID."
         elif action=="admin_add_help":msg="👤 To add an admin: /addadmin TELEGRAM_USER_ID."
         elif action=="admin_orders":return await orders(u,c)
         else:msg="Unknown admin action."
         await q.message.reply_text(msg);return
-    if action=="admin_home":\n        if is_admin(uid):await q.message.reply_text("🛠 Admin Control Center",reply_markup=admin_menu())\n        return\n    if action=="home":return await start(u,c)
+    if action=="admin_home":
+        if is_admin(uid):await q.message.reply_text("🛠 Admin Control Center",reply_markup=admin_menu())
+        return
+    if action=="home":return await start(u,c)
     if action in ("topup","wallet"):return await SHOP.topup(u,c)
     if action=="history":return await history(u,c)
     if action=="support":return await SHOP.support(u,c)
