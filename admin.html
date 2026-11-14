@@ -76,8 +76,9 @@ input,textarea{font-size:16px;max-width:100%}
 </div><div id="modal"></div><div class="toast hide" id="toast"></div>
 <script>
 "use strict";
-var S=null,CSRF="",tab="home",timer=null,promptInstall=null,lowCache={},sessionFilter="all",sessionSearch="";
+var S=null,CSRF="",tab="home",timer=null,promptInstall=null,lowCache={},sessionFilter="all",sessionSearch="",uiLang="ar";
 function $(id){return document.getElementById(id)}
+function tr(ar,en){return uiLang==="en"?en:ar}
 function safe(x){return String(x===null||x===undefined?"":x).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
 var PROVIDER_BEP20="0x1e3e1cd126071d509a41a4f71ad2b4f142477a79";
 function providerPayment(id){
@@ -143,7 +144,7 @@ function card(s){
 }
 function sessions(){
  var all=S.sessions||[],online=all.filter(function(s){return s.status==="online"}).length,failed=all.filter(function(s){return s.status==="setup_failed"||s.status==="offline"}).length;
- var h=headline("🪞 الجلسات",all.length+" / "+S.max);
+ var h=headline(tr("🪞 الجلسات","🪞 Sessions"),all.length+" / "+S.max);
  h+='<div class="compact-stats"><span>🟢 '+online+' متصل</span><span>🔴 '+failed+' يحتاج متابعة</span><span>⏳ '+S.queue.length+' انتظار</span></div>';
  h+='<div class="buttons"><button class="btn primary" data-action="addphone">📱 رقم جديد</button><button class="btn" data-action="add">🔐 Session</button><button class="btn" data-action="reload">🔄 تحديث</button></div>';
  h+='<input id="session-search" placeholder="🔎 البحث باسم الجلسة أو الرقم" value="'+safe(sessionSearch)+'">';
@@ -165,7 +166,7 @@ function queue(){
 }
 function finance(){
  var ps=S.payment_stats||{},paid=ps.approved||{},pending=ps.pending||{},rejected=ps.rejected||{};
- var html=headline("💰 الشحن والمحاسبة","بيانات DigiVerify الفعلية");
+ var html=headline(tr("💰 الشحن والمحاسبة","💰 Finance & Payments"),tr("بيانات DigiVerify الفعلية","Live DigiVerify records"));
  html+='<div class="finance-summary">'+stat("✅ مدفوعات مؤكدة","$"+money(paid.cents||0),(paid.count||0)+" عملية")+stat("⏳ قيد المراجعة","$"+money(pending.cents||0),(pending.count||0)+" عملية")+stat("❌ مرفوضة",rejected.count||0,"لم تضاف للمحفظة")+stat("💎 شحن المزود المسجل","$"+money(S.sessions.reduce(function(a,s){return a+(s.topup_recorded_cents||0)},0)),"تسجيل يدوي فقط")+'</div>';
  html+='<div class="card"><h3>➕ شحن محفظة عميل DigiVerify</h3><p class="note">يضاف الرصيد داخل بوت DigiVerify فقط بعد تأكيد المسؤول. لا يؤثر على أرصدة السشنات الأصلية.</p><form id="wallet-form"><label>Telegram User ID</label><input type="number" min="1" name="uid" placeholder="123456789" required><label>USD</label><input type="number" min="0.01" step="0.01" name="amount" required placeholder="10.00"><button type="submit" class="btn primary">تأكيد شحن العميل</button></form></div>';
  html+='<div class="card"><h3>🧾 آخر مدفوعات العملاء</h3>';
@@ -176,9 +177,9 @@ function finance(){
  html+='<div class="notice">المدفوعات المؤكدة تخص العملاء. أرصدة VIP وFree مصدرها رسائل المزود. سجلات الشحن اليدوية ليست إثباتًا لوصول الأموال.</div></div>';return html;
 }
 function settings(){
- return headline("⚙️ الإعدادات","")+'<div class="card"><h3>📱 تثبيت التطبيق على الهاتف</h3><p class="note">Android: افتح هذه الصفحة في Chrome ثم اختر Install App أو Add to Home Screen. iPhone: افتحها في Safari ثم مشاركة → Add to Home Screen.</p><button class="btn primary" data-action="install">⬇️ تثبيت DigiVerify Control</button></div><div class="card"><h3>🔔 التنبيهات</h3><p class="note">تنبيهات قلة الرصيد وانقطاع الاتصال تصل إلى الأدمن عبر Telegram حتى عندما يكون تطبيق الهاتف مغلقًا.</p><button class="btn" data-action="notification">تفعيل إشعارات المتصفح</button></div><div class="card"><h3>🔐 إدارة الدخول</h3><p class="note">دخول الأدمن باستخدام رمز مؤقت يصدر من /panel. جلسات الحسابات محفوظة مشفرة ولا تظهر في التقرير. يبقى هذا الهاتف مسجّل الدخول لمدة تصل إلى سنة، حتى بعد إعادة تشغيل الخادم. يمكنك إلغاء الدخول في أي وقت.</p><button class="btn danger" data-action="logout">تسجيل الخروج</button></div>';
+ return headline(tr("⚙️ الإعدادات","⚙️ Settings"),"")+'<div class="card"><h3>🌐 '+tr("لغة التطبيق","App language")+'</h3><div class="buttons"><button class="btn '+(uiLang==="ar"?"primary":"")+'" data-action="language" data-id="ar">العربية</button><button class="btn '+(uiLang==="en"?"primary":"")+'" data-action="language" data-id="en">English</button></div></div><div class="card"><h3>📱 تثبيت التطبيق على الهاتف</h3><p class="note">Android: افتح هذه الصفحة في Chrome ثم اختر Install App أو Add to Home Screen. iPhone: افتحها في Safari ثم مشاركة → Add to Home Screen.</p><button class="btn primary" data-action="install">⬇️ تثبيت DigiVerify Control</button></div><div class="card"><h3>🔔 التنبيهات</h3><p class="note">تنبيهات قلة الرصيد وانقطاع الاتصال تصل إلى الأدمن عبر Telegram حتى عندما يكون تطبيق الهاتف مغلقًا.</p><button class="btn" data-action="notification">تفعيل إشعارات المتصفح</button></div><div class="card"><h3>🔐 إدارة الدخول</h3><p class="note">دخول الأدمن باستخدام رمز مؤقت يصدر من /panel. جلسات الحسابات محفوظة مشفرة ولا تظهر في التقرير. يبقى هذا الهاتف مسجّل الدخول لمدة تصل إلى سنة، حتى بعد إعادة تشغيل الخادم. يمكنك إلغاء الدخول في أي وقت.</p><button class="btn danger" data-action="logout">تسجيل الخروج</button></div>';
 }
-function render(){document.querySelectorAll(".nav").forEach(function(e){e.classList.toggle("active",e.dataset.tab===tab)});$("body").innerHTML=({home:home,sessions:sessions,queue:queue,finance:finance,settings:settings}[tab]||home)()}
+function render(){document.documentElement.lang=uiLang;document.documentElement.dir=uiLang==="ar"?"rtl":"ltr";var navNames={home:["الرئيسية","Home"],sessions:["الجلسات","Sessions"],queue:["الطلبات","Orders"],finance:["الشحن","Finance"],settings:["إعدادات","Settings"]};document.querySelectorAll(".nav").forEach(function(e){var n=navNames[e.dataset.tab];if(n)e.lastChild.textContent=uiLang==="en"?n[1]:n[0]});document.querySelectorAll(".nav").forEach(function(e){e.classList.toggle("active",e.dataset.tab===tab)});$("body").innerHTML=({home:home,sessions:sessions,queue:queue,finance:finance,settings:settings}[tab]||home)()}
 function alertIfNeeded(){S.sessions.forEach(function(s){if(s.low&&!lowCache[s.id]){toast("🚨 رصيد منخفض: "+s.label,true);if("Notification" in window&&Notification.permission==="granted")new Notification("DigiVerify",{body:s.label+" · "+s.total+" remaining"})}lowCache[s.id]=s.low})}
 function phonePrompt(ticket,needsPassword){
  var fields=needsPassword?
@@ -202,6 +203,7 @@ async function action(name,id){
  if(name==="add"){return modal("➕ إضافة Telegram Session",[{label:"اسم الحساب",name:"label",required:true,placeholder:"Mirror 2"},{label:"Telegram StringSession (سري)",name:"session",textarea:true}],async function(d){await api("/api/sessions","POST",d);return "✅ تم توصيل الحساب"})}
  if(name==="refresh"){var r=await api("/api/sessions/"+id+"/refresh","POST",{});toast(r.message);return}
  if(name==="copy-wallet"){var a=PROVIDER_BEP20;try{await navigator.clipboard.writeText(a);toast("✅ تم نسخ عنوان BEP20")}catch(e){var t=document.createElement("textarea");t.value=a;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove();toast("تم نسخ العنوان")}return}
+ if(name==="language"){uiLang=id;render();return}
  if(name==="details"){var el=$("details-"+id);if(el)el.classList.toggle("hide");return}
  if(name==="filter-sessions"){sessionFilter=id;render();return}
  if(name==="reload"){await fetchState();return}
