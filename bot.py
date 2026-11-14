@@ -142,10 +142,55 @@ def menu():
 def admin_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Order",callback_data="admin_cancel_help"),InlineKeyboardButton("👤 Add Admin",callback_data="admin_add_help")],[InlineKeyboardButton("📋 Orders",callback_data="admin_orders")]])
 
+
+def channel_gate_keyboard():
+    channel=SHOP.get("required_channel","").strip()
+    rows=[]
+    if channel:
+        url=channel if channel.startswith("https://") else "https://t.me/"+channel.lstrip("@")
+        rows.append([InlineKeyboardButton("📢 Join DigiVerify Channel",url=url)])
+    rows.append([InlineKeyboardButton("✅ Check Membership",callback_data="channel_check")])
+    return InlineKeyboardMarkup(rows)
+
+async def channel_member(uid,ctx):
+    channel=SHOP.get("required_channel","").strip()
+    if not channel:return True
+    target=channel
+    if channel.startswith("https://t.me/"):
+        target="@"+channel.removeprefix("https://t.me/").strip("/")
+    try:
+        m=await ctx.bot.get_chat_member(chat_id=target,user_id=uid)
+        return m.status in ("creator","administrator","member") or (m.status=="restricted" and getattr(m,"is_member",False))
+    except Exception:
+        logging.warning("Cannot verify DigiVerify channel membership for user %s",uid)
+        return False
+
+async def require_channel(u,ctx):
+    if is_admin(u.effective_user.id) or await channel_member(u.effective_user.id,ctx):
+        return True
+    await u.effective_message.reply_text(
+        "📢 DIGIVERIFY CHANNEL MEMBERSHIP REQUIRED\n"
+        "Join our channel, then tap Check Membership to unlock the bot.",
+        reply_markup=channel_gate_keyboard())
+    return False
+
+async def setchannel(u,ctx):
+    if not is_admin(u.effective_user.id):return
+    value=" ".join(ctx.args).strip()
+    if value.lower()=="off":value=""
+    elif not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}|https://t\.me/[A-Za-z][A-Za-z0-9_]{4,31}",value):
+        await u.effective_message.reply_text("Usage: /setchannel @YourPublicChannel (or /setchannel off)\nAdd DigiVerify as channel admin.")
+        return
+    with closing(db()) as con:
+        con.execute("INSERT OR REPLACE INTO shop_settings(k,v) VALUES('required_channel',?)",(value,))
+        con.commit()
+    await u.effective_message.reply_text("✅ Required channel "+("enabled: "+value if value else "disabled")+". Membership checked for every customer request.")
+
 async def start(u,c):
     uid=u.effective_user.id
     ref=int(c.args[0]) if c.args and c.args[0].isdigit() else None
     user(uid,ref)
+    if not await require_channel(u,c):return
     cash,points=balance(uid)
     money="♾ Unlimited free administrator tests" if is_admin(uid) else f"USD {cash/100:.2f}"
     await u.effective_message.reply_text(
@@ -167,6 +212,7 @@ async def start(u,c):
         await u.effective_message.reply_text("🛠 DIGIVERIFY ADMIN CONTROLS",reply_markup=admin_menu())
 
 async def wallet(u,c):
+    if not await require_channel(u,c):return
     user(u.effective_user.id)
     uid=u.effective_user.id
     amount,points=balance(uid)
@@ -178,6 +224,7 @@ async def wallet(u,c):
     await u.effective_message.reply_text(msg)
 
 async def history(u,c):
+    if not await require_channel(u,c):return
     uid=u.effective_user.id
     user(uid)
     cash,points=balance(uid)
@@ -210,6 +257,15 @@ async def history(u,c):
 async def callback(u,c):
     q=u.callback_query
     action=q.data or ""
+    if action=="channel_check":
+        await q.answer()
+        if await require_channel(u,c):
+            await q.message.reply_text("✅ Channel membership confirmed.")
+            await start(u,c)
+        return
+    if not await require_channel(u,c):
+        await q.answer()
+        return
     if action.startswith("up:"):
         await q.answer("This original-bot button is no longer active. Use DigiVerify's menu.",show_alert=True)
         await q.message.reply_text("🏠 DigiVerify Main Menu",reply_markup=menu())
@@ -254,6 +310,7 @@ def valid(url):
     except ValueError: return False
 
 async def intake(u,c):
+    if not await require_channel(u,c):return
     url=u.message.text.strip()
     if not valid(url):
         if await SHOP.submit_tx(u,c,url):return
@@ -427,8 +484,12 @@ async def cancel_command(u,c):
         await u.message.reply_text("Usage: /cancel ORDER_ID"); return
     await cancel_order(u,c,oid)
 
-async def topup_command(u,c):await SHOP.topup(u,c)
-async def support_command(u,c):await SHOP.support(u,c)
+async def topup_command(u,c):
+    if not await require_channel(u,c):return
+    await SHOP.topup(u,c)
+async def support_command(u,c):
+    if not await require_channel(u,c):return
+    await SHOP.support(u,c)
 async def setpayment(u,c):await SHOP.configure(u,c,"payment")
 async def setgroup(u,c):await SHOP.configure(u,c,"group")
 async def setsupport(u,c):await SHOP.configure(u,c,"support")
@@ -458,13 +519,16 @@ async def orders(u,c):
     await u.effective_message.reply_text("📋 ORDERS\n"+("\n".join("#"+str(r["id"])+" "+str(r["uid"])+" "+r["status"] for r in rows) or "None")+"\n\nTo cancel: /cancel ORDER_ID",reply_markup=admin_menu())
 
 async def services_command(u,c):
+    if not await require_channel(u,c):return
     user(u.effective_user.id)
     await u.effective_message.reply_text(catalog_text(u.effective_user.id))
 
 async def guide_command(u,c):
+    if not await require_channel(u,c):return
     await u.effective_message.reply_text(guide_text())
 
 async def verify_command(u,c):
+    if not await require_channel(u,c):return
     user(u.effective_user.id)
     await u.effective_message.reply_text(verify_text(u.effective_user.id))
 
@@ -629,7 +693,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("topup",topup_command),("support",support_command),("setpayment",setpayment),("setgroup",setgroup),("setsupport",setsupport),("topups",topups_command),("approve",approve_command),("reject",reject_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
+    for command,handler in [("start",start),("setchannel",setchannel),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("topup",topup_command),("support",support_command),("setpayment",setpayment),("setgroup",setgroup),("setsupport",setsupport),("topups",topups_command),("approve",approve_command),("reject",reject_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
