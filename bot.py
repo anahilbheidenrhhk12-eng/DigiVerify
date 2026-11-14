@@ -9,6 +9,7 @@ from telethon.sessions import StringSession
 from mirror import ProviderMirror
 from pool import MirrorPool
 from panel import AdminPanel, ensure_panel_tables, load_saved_sessions, is_disabled
+from shop import CustomerShop
 
 logging.basicConfig(level=logging.WARNING)
 TOKEN=os.getenv("BOT_TOKEN","")
@@ -55,6 +56,13 @@ def is_admin(uid):
     with closing(db()) as con:
         return con.execute("SELECT 1 FROM extra_admins WHERE uid=?",(uid,)).fetchone() is not None
 
+def shop_admin_ids():
+    with closing(db()) as con:
+        extra={int(r["uid"]) for r in con.execute("SELECT uid FROM extra_admins")}
+    return ADMINS | extra
+
+SHOP=CustomerShop(db,balance,is_admin,shop_admin_ids,PRICE,SUPPORT)
+
 def guide_text():
     return f"""💬 HELP CENTER & USER GUIDE
 ━━━━━━━━━━━━━━━━━━
@@ -74,7 +82,7 @@ https://services.sheerid.com/verify/...
 • Use only genuine eligible student details and documents.
 
 ☎️ 3. Customer Support:
-{('@' + SUPPORT) if SUPPORT else 'Contact the administrator to top up or request help.'}
+{('@' + SHOP.support_name()) if SHOP.support_name() else 'Use DigiVerify Support / Top Up to contact our administrators.'}
 
 👇 Use the buttons below to view your wallet or the services catalog."""
 
@@ -123,14 +131,13 @@ https://services.sheerid.com/verify/...
 {gate}"""
 
 def menu():
-    buttons=[
-      [InlineKeyboardButton("💰 Top Up / Wallet",callback_data="wallet"),InlineKeyboardButton("🛍 Edu Services",callback_data="services")],
-      [InlineKeyboardButton("📋 History & Balance",callback_data="history"),InlineKeyboardButton("🎟 Promo Code",callback_data="promo")],
-      [InlineKeyboardButton("👥 Invite Friends (+3 pts)",callback_data="invite"),InlineKeyboardButton("💬 Support",callback_data="support")],
-      [InlineKeyboardButton("💬 Help & Guide",callback_data="help"),InlineKeyboardButton("🎓 Verify Student",callback_data="verify")],
-      [InlineKeyboardButton("💎 VIP Priority",callback_data="vip")]
-    ]
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup([
+       [InlineKeyboardButton("💰 Top Up / Buy Credits",callback_data="topup"),InlineKeyboardButton("🛍 Edu Services",callback_data="services")],
+       [InlineKeyboardButton("📋 History & Balance",callback_data="history"),InlineKeyboardButton("🎟 Promo Code",callback_data="promo")],
+       [InlineKeyboardButton("👥 Invite Friends (+3 pts)",callback_data="invite"),InlineKeyboardButton("💬 Support Group",callback_data="support")],
+       [InlineKeyboardButton("💬 Help & Guide",callback_data="help"),InlineKeyboardButton("🌐 Change Language",callback_data="language")],
+       [InlineKeyboardButton("🎓 Verify Student",callback_data="verify")]
+    ])
 
 def admin_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Order",callback_data="admin_cancel_help"),InlineKeyboardButton("👤 Add Admin",callback_data="admin_add_help")],[InlineKeyboardButton("📋 Orders",callback_data="admin_orders")]])
@@ -139,44 +146,25 @@ async def start(u,c):
     uid=u.effective_user.id
     ref=int(c.args[0]) if c.args and c.args[0].isdigit() else None
     user(uid,ref)
-    if MIRROR is not None and not is_admin(uid) and balance(uid)[0]<PRICE:
-        await u.effective_message.reply_text(f"🔒 DigiVerify wallet top-up required. Please add at least {PRICE_LABEL} before accessing the original verification bot. Open Wallet / Top Up.",reply_markup=menu())
-        return
-    if MIRROR is not None:
-        if not await MIRROR.open(uid):
-            await u.effective_message.reply_text(f"⏳ All mirrors are busy. You are in the waiting queue at position #{MIRROR.position(uid)}. We will notify you automatically when your turn arrives.")
-            return
-        if is_admin(uid):
-            await u.effective_message.reply_text("🛠 ADMIN CONTROLS",reply_markup=admin_menu())
-        else:
-            cash,_=balance(uid)
-            await u.effective_message.reply_text(f"💰 DigiVerify wallet: USD {cash/100:.2f}\n💎 Successful verification: {PRICE_LABEL}\n🛡 Failed / pending attempts: no charge.\n🔒 Add funds before sending a verification link.")
-        return
-    amount,points=balance(uid)
-    role=("♾ ADMIN TEST MODE — FREE & UNLIMITED" if is_admin(uid)
-          else f"💰 Wallet Balance: USD {format(amount/100,'.2f')}")
-    prompt=("👉 Paste a new SheerID link directly into this chat!" if is_admin(uid) or amount>=PRICE
-            else "🔒 Top up your wallet before submitting a link. Unfunded customer trials are blocked.")
+    cash,points=balance(uid)
+    money="♾ Unlimited free administrator tests" if is_admin(uid) else f"USD {cash/100:.2f}"
     await u.effective_message.reply_text(
         f"""👋 WELCOME TO DIGIVERIFY! 🎓
 ━━━━━━━━━━━━━━━━━━
 👤 Dear Customer: {u.effective_user.first_name} (ID: {uid})
-{role}
-✨ Reward Points: {points} pts
+💰 DigiVerify Wallet: {money}
+✨ Reward Points: {points}
 ━━━━━━━━━━━━━━━━━━
-🎯 Automated Service: SheerID Google One AI Premium (5TB Cloud + Gemini Advanced)
-💎 Price: {PRICE_LABEL} per SUCCESSFUL verification
-🛡 Failed or pending attempts: ZERO CREDITS DEDUCTED
+🎓 SheerID Google One AI Premium (5TB)
+💎 Price: {PRICE_LABEL} on CONFIRMED SUCCESS only
+🛡 Failed / pending verification: ZERO CHARGE
 
-👉 Quick Start:
-• Open https://one.google.com/ai-student
-• Choose the student discount; continue to SheerID
-• Copy the full URL starting with https://services.sheerid.com/verify/...
-• Paste your link DIRECTLY into THIS bot chat!
+👉 Open https://one.google.com/ai-student, choose the student offer, and send your full https://services.sheerid.com/verify/... link into THIS chat.
 
-{prompt}""",reply_markup=menu())
+💳 DigiVerify Top Up charges only your DigiVerify wallet, never the original bot.""",
+        reply_markup=menu(),disable_web_page_preview=True)
     if is_admin(uid):
-        await u.effective_message.reply_text("🛠 ADMIN CONTROLS",reply_markup=admin_menu())
+        await u.effective_message.reply_text("🛠 DIGIVERIFY ADMIN CONTROLS",reply_markup=admin_menu())
 
 async def wallet(u,c):
     user(u.effective_user.id)
@@ -186,7 +174,7 @@ async def wallet(u,c):
         msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💎 ADMIN: ♾ UNLIMITED FREE TESTS\n💰 Wallet: USD {format(amount/100,'.2f')} (never charged for admin tests)\n✨ Reward Points: {points}"
     else:
         msg=f"📋 CUSTOMER ACCOUNT & WALLET SUMMARY\n\n👤 Telegram ID: {uid}\n💰 Wallet Balance: USD {format(amount/100,'.2f')}\n🎓 Price per SUCCESS: {PRICE_LABEL}\n🎟 Available verifications: {amount//PRICE}\n✨ Reward Points: {points}\n\n🔒 Customers must top up BEFORE submitting their first link.\n🛡 Failed or pending attempts do not deduct credits."
-    msg+="\n\n💳 To top up, contact "+("@"+SUPPORT if SUPPORT else "the administrator")+". An administrator updates your balance after payment confirmation."
+    msg+="\n\n💳 Use DigiVerify Top Up to add funds. Our administrator confirms payment before crediting your wallet."
     await u.effective_message.reply_text(msg)
 
 async def history(u,c):
