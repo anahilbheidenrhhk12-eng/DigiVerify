@@ -74,6 +74,18 @@ class MirrorPool:
 
     async def submit_order(self,uid,oid,url):
         async with self.lock:
+            owned=self._find(uid)
+            if owned and getattr(owned,"needs_rotation",False) and self.waiting:
+                # A customer who just finished must queue behind existing waiters,
+                # never reuse the same Telegram account ahead of the FIFO list.
+                if owned.active_order is None and await owned.release(uid):
+                    self.owners.pop(uid,None)
+                    owned.needs_rotation=False
+                self.queued_orders[uid]=(oid,url)
+                if uid not in self.waiting:
+                    self.waiting.append(uid)
+                await self._drain()
+                return "processing" if self._find(uid) and self._find(uid).active_order==oid else "queued"
             m=await self._allocate(uid)
             if m:
                 ok=await m.submit_order(uid,oid,url)
