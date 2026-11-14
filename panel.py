@@ -286,6 +286,8 @@ class AdminPanel:
             rows=con.execute("SELECT * FROM session_registry ORDER BY label,account_id").fetchall()
             orders=con.execute("SELECT id,uid,status,created FROM orders ORDER BY id DESC LIMIT 30").fetchall()
             stats={r["status"]:r["n"] for r in con.execute("SELECT status,COUNT(*) n FROM orders GROUP BY status")}
+            payment_stats={r["status"]:{"count":r["n"],"cents":r["cents"]} for r in con.execute("SELECT status,COUNT(*) n,COALESCE(SUM(cents),0) cents FROM customer_topups GROUP BY status")}
+            recent_payments=[dict(r) for r in con.execute("SELECT id,uid,cents,status,created,reviewed FROM customer_topups ORDER BY id DESC LIMIT 30")]
         items=[self._summary(mirrors.get(int(r["account_id"])),r) for r in rows]
         queue=[{"position":i+1,"uid":uid,"order":p.queued_orders.get(uid,[None])[0]} for i,uid in enumerate(p.waiting)] if p else []
         token=req.cookies.get("dv_admin")
@@ -297,7 +299,7 @@ class AdminPanel:
             "active":len(mirrors),
             "sessions":items,"queue":queue,
             "orders":[dict(r) for r in orders],
-            "order_stats":stats,"time":int(time.time())
+            "order_stats":stats,"payment_stats":payment_stats,"recent_payments":recent_payments,"time":int(time.time())
         })
 
     async def start(self):
