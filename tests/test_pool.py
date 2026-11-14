@@ -67,4 +67,17 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started,[55])
         self.assertIn("processing",bot.messages[-1][1])
 
+    async def test_completed_customer_rotates_behind_waiter(self):
+        m=FakeMirror()
+        bot=FakeBot()
+        pool=MirrorPool([m],bot,finished=lambda oid:True)
+        self.assertTrue(await pool.open(101))
+        self.assertFalse(await pool.open(202))
+        m.needs_rotation=True
+        result=await pool.submit_order(101,88,"https://services.sheerid.com/verify/next")
+        self.assertEqual(result,"queued")
+        self.assertEqual(pool.owners.get(202),m)
+        self.assertEqual(pool.position(101),1)
+        self.assertNotIn(101,pool.owners)
+
 if __name__=="__main__":unittest.main()
