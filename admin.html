@@ -56,7 +56,7 @@ input,textarea{font-size:16px;max-width:100%}
  .bar{padding-inline:5px}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-</style>
+.pay-flow{display:grid;gap:12px}.pay-step{border:1px solid #385373;background:#102038;border-radius:15px;padding:14px}.pay-step strong{display:block;margin-bottom:8px}.pay-address{direction:ltr;text-align:left;overflow-wrap:anywhere;user-select:all;background:#0a1729;border:1px dashed #7299c8;border-radius:11px;padding:13px;font-size:14px;line-height:1.7;color:#cde2ff}.pay-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pay-actions .btn{min-height:48px}.pay-actions .wide{grid-column:1/-1}.pay-badge{display:inline-block;background:#173e39;color:#64e2b8;padding:5px 10px;border-radius:20px;font-size:12px;margin-bottom:10px}.pay-link{display:block;text-align:center;text-decoration:none;padding:13px;border-radius:11px;background:#27456a;color:#fff;font-weight:700}.pay-step p{color:#b3c6df;line-height:1.7;margin:5px 0 12px}</style>
 </head>
 <body>
 <div id="login" class="login-page">
@@ -79,6 +79,17 @@ input,textarea{font-size:16px;max-width:100%}
 var S=null,CSRF="",tab="home",timer=null,promptInstall=null,lowCache={};
 function $(id){return document.getElementById(id)}
 function safe(x){return String(x===null||x===undefined?"":x).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+var PROVIDER_BEP20="0x1e3e1cd126071d509a41a4f71ad2b4f142477a79";
+function providerPayment(id){
+ var item=S&&S.sessions.find(function(x){return String(x.id)===String(id)});
+ if(!item){toast("الجلسة غير موجودة",true);return}
+ var h='<div class="modal-bg"><div class="modal"><div class="row"><h3>💳 شحن حساب '+safe(item.label)+'</h3><button class="btn" data-action="close">✕</button></div>';
+ h+='<div class="pay-flow"><div class="pay-step"><span class="pay-badge">USDT · BNB Smart Chain (BEP20)</span><strong>① عنوان الدفع الخاص بالمزود</strong><div class="pay-address" id="provider-wallet">'+PROVIDER_BEP20+'</div><div class="pay-actions" style="margin-top:10px"><button class="btn primary wide" data-action="copy-wallet">📋 نسخ عنوان المحفظة</button></div><p>أرسل USDT على شبكة BEP20 فقط. الدفع يتم من محفظتك الخارجية، وليس من داخل التطبيق.</p></div>';
+ h+='<div class="pay-step"><strong>② نفّذ التحويل</strong><p>افتح تطبيق محفظتك أو Binance، وأرسل المبلغ إلى العنوان أعلاه. احتفظ برقم المعاملة TxHash.</p><a class="pay-link" href="https://t.me/gemini_ver_bot" target="_blank" rel="noopener noreferrer">🤖 فتح البوت الأصلي (اختياري)</a></div>';
+ h+='<div class="pay-step"><strong>③ أرسل TxHash لتأكيد الشحن</strong><p>بعد إتمام الدفع فقط، ألصق رقم المعاملة ليقوم النظام بإرساله عبر السشن المحددة إلى البوت الأصلي.</p><form id="provider-pay-form" data-id="'+safe(id)+'"><label>TxHash — 0x + 64 characters</label><input name="txhash" dir="ltr" inputmode="text" autocomplete="off" spellcheck="false" pattern="0x[a-fA-F0-9]{64}" placeholder="0x..." required><button class="btn primary" type="submit" style="width:100%">🔎 تأكيد التحويل عبر البوت الأصلي</button></form></div><div class="notice">⚠️ لا يتم تحويل الأموال تلقائيًا. لا تعِد إرسال TxHash سبق استعماله. الرصيد يتحدث فقط عند تأكيد المزود.</div></div></div></div>';
+ $("modal").innerHTML=h;
+ $("provider-pay-form").addEventListener("submit",async function(e){e.preventDefault();var form=e.target,tx=form.elements.txhash.value.trim();if(!confirm("هل أرسلت المبلغ فعلاً عبر BEP20 وتريد تقديم TxHash للبوت الأصلي؟"))return;var btn=form.querySelector("button[type=submit]");btn.disabled=true;btn.textContent="⏳ جارٍ التأكيد، انتظر...";try{var r=await api("/api/sessions/"+id+"/claim","POST",{txhash:tx});$("modal").innerHTML="";toast(r.status==="success"?"✅ أكد المزود نجاح الشحن":r.status==="failed"?"❌ رفض المزود العملية":"⏳ لم يؤكد المزود الشحن بعد؛ راجع المحادثة");await fetchState()}catch(err){toast(err.message,true);btn.disabled=false;btn.textContent="🔎 تأكيد التحويل عبر البوت الأصلي"}});
+}
 function money(c){return (Number(c||0)/100).toFixed(2)}
 function date(t){return t?new Date(t*1000).toLocaleString("ar-TN"):"لم يتم رصده"}
 function toast(t,err){var el=$("toast");el.textContent=t;el.style.borderColor=err?"#ff8791":"#6c84a3";el.classList.remove("hide");setTimeout(function(){el.classList.add("hide")},3500)}
@@ -181,9 +192,10 @@ async function action(name,id){
  if(name==="addphone"){return modal("📱 إضافة رقم Telegram",[{label:"اسم الحساب",name:"label",placeholder:"Mirror 2",required:true},{label:"رقم الهاتف مع رمز الدولة",name:"phone",placeholder:"+216XXXXXXXX",required:true}],async function(d){var r=await api("/api/phone/start","POST",d);setTimeout(function(){phonePrompt(r.ticket,false)},200);return "تم إرسال كود تسجيل الدخول إلى Telegram"})}
  if(name==="add"){return modal("➕ إضافة Telegram Session",[{label:"اسم الحساب",name:"label",required:true,placeholder:"Mirror 2"},{label:"Telegram StringSession (سري)",name:"session",textarea:true}],async function(d){await api("/api/sessions","POST",d);return "✅ تم توصيل الحساب"})}
  if(name==="refresh"){var r=await api("/api/sessions/"+id+"/refresh","POST",{});toast(r.message);return}
+ if(name==="copy-wallet"){var a=PROVIDER_BEP20;try{await navigator.clipboard.writeText(a);toast("✅ تم نسخ عنوان BEP20")}catch(e){var t=document.createElement("textarea");t.value=a;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove();toast("تم نسخ العنوان")}return}
  if(name==="reload"){await fetchState();return}
  if(name==="limit"){return modal("حد تنبيه "+safe(s.label),[{label:"التنبيه عند هذا الرصيد",name:"threshold",type:"number",min:0,value:s.threshold,required:true}],async function(d){await api("/api/sessions/"+id+"/threshold","POST",{threshold:Number(d.threshold)});return "تم تعديل حد التنبيه"})}
- if(name==="claim"){return modal("🔑 شحن BEP20 — "+safe(s.label),[{label:"TxHash للتحويل المكتمل (0x...)",name:"txhash",required:true,placeholder:"0x..."}],async function(d){if(!confirm("إرسال هذا TxHash للبوت الأصلي من الحساب "+s.label+"؟ لا يمكن استعماله مرتين."))throw Error("تم الإلغاء");var r=await api("/api/sessions/"+id+"/claim","POST",d);return r.status==="success"?"✅ أكد البوت الأصلي نجاح الشحن":r.status==="failed"?"❌ رفض البوت الأصلي المعاملة": "⏳ لم يؤكد البوت الشحن بعد؛ راجع محادثته"})}
+ if(name==="claim"){return providerPayment(id)}\n if(name==="legacyclaim"){return modal("🔑 شحن BEP20 — "+safe(s.label),[{label:"TxHash للتحويل المكتمل (0x...)",name:"txhash",required:true,placeholder:"0x..."}],async function(d){if(!confirm("إرسال هذا TxHash للبوت الأصلي من الحساب "+s.label+"؟ لا يمكن استعماله مرتين."))throw Error("تم الإلغاء");var r=await api("/api/sessions/"+id+"/claim","POST",d);return r.status==="success"?"✅ أكد البوت الأصلي نجاح الشحن":r.status==="failed"?"❌ رفض البوت الأصلي المعاملة": "⏳ لم يؤكد البوت الشحن بعد؛ راجع محادثته"})}
  if(name==="topup"){return modal("تسجيل شحن "+safe(s.label),[{label:"المبلغ المدفوع للمزود (USD)",name:"amount",type:"number",step:"0.01",min:"0.01",required:true},{label:"ملاحظة أو رقم العملية",name:"note",placeholder:"Payment reference"}],async function(d){var r=await api("/api/sessions/"+id+"/topup-note","POST",d);return r.notice})}
  if(name==="enable"){await api("/api/sessions/"+id+"/enable","POST",{});toast("✅ تم إعادة الاتصال");await fetchState();return}
  if(name==="remove"){if(!confirm("إزالة حساب "+s.label+"؟"))return;await api("/api/sessions/"+id,"DELETE",{});toast("تمت الإزالة");await fetchState();return}
