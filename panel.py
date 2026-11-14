@@ -401,6 +401,9 @@ class AdminPanel:
                     if not await m.client.is_user_authorized():
                         raise RuntimeError("Session expired or Telegram authorization revoked")
                     if getattr(m,"setup_state","ready")=="setup_failed":
+                        if time.monotonic()-getattr(m,"last_setup_attempt",0)<300:
+                            continue
+                        m.last_setup_attempt=time.monotonic()
                         from provider_setup import setup_provider_account
                         ready,reason=await setup_provider_account(m.client,self.botmod.PROVIDER)
                         m.setup_state="ready" if ready else "setup_failed"
