@@ -211,45 +211,41 @@ async def callback(u,c):
     q=u.callback_query
     action=q.data or ""
     if action.startswith("up:"):
-        if not is_admin(q.from_user.id) and balance(q.from_user.id)[0] < PRICE:
-            await q.answer("Top up the DigiVerify wallet first.",show_alert=True)
-            return
-        if MIRROR is None:
-            await q.answer("Provider mirror unavailable",show_alert=True)
-            return
-        try:
-            ok,popup=await MIRROR.press(q.from_user.id,action[3:])
-            if ok:
-                await q.answer((popup or "Sent to original bot.")[:190])
-            else:
-                await q.answer(popup[:190],show_alert=True)
-        except Exception:
-            logging.exception("Upstream button relay failed")
-            await q.answer("Original bot did not accept this action.",show_alert=True)
+        await q.answer("This original-bot button is no longer active. Use DigiVerify's menu.",show_alert=True)
+        await q.message.reply_text("🏠 DigiVerify Main Menu",reply_markup=menu())
         return
     await q.answer()
-    if action.startswith("admin_"):
-        if not is_admin(q.from_user.id):
-            await q.message.reply_text("⛔ Admin access required."); return
-        if action=="admin_cancel_help": msg="🛑 Cancel an order: /cancel ORDER_ID. Queued orders are stopped immediately; active provider requests cannot be recalled after submission."
-        elif action=="admin_add_help": msg="👤 Add another admin: /addadmin TELEGRAM_USER_ID. New admins can manage orders and wallet, and test for free."
-        elif action=="admin_orders": return await orders(u,c)
-        else: msg="Unknown admin action."
-        await q.message.reply_text(msg); return
-    if action=="wallet": return await wallet(u,c)
-    if action=="history": return await history(u,c)
     uid=q.from_user.id
-    if action=="verify": msg=verify_text(uid)
+    if action.startswith("admin_"):
+        if not is_admin(uid):
+            await q.message.reply_text("⛔ Admin access required.");return
+        if action=="admin_cancel_help":msg="🛑 To cancel an order: /cancel ORDER_ID."
+        elif action=="admin_add_help":msg="👤 To add an admin: /addadmin TELEGRAM_USER_ID."
+        elif action=="admin_orders":return await orders(u,c)
+        else:msg="Unknown admin action."
+        await q.message.reply_text(msg);return
+    if action=="home":return await start(u,c)
+    if action in ("topup","wallet"):return await SHOP.topup(u,c)
+    if action=="history":return await history(u,c)
+    if action=="support":return await SHOP.support(u,c)
+    if action=="support_request":return await SHOP.request_support(u,c)
+    if action.startswith("buy:"):
+        try:cents=int(action.split(":",1)[1])
+        except ValueError:return
+        return await SHOP.choose_amount(u,c,cents)
+    if action=="help":
+        await q.message.reply_text(guide_text(),reply_markup=SHOP.support_keyboard(),disable_web_page_preview=True);return
+    if action=="language":
+        await q.message.reply_text("🌐 DigiVerify currently supports English.",reply_markup=menu());return
+    if action=="verify":msg=verify_text(uid)
     elif action=="invite":
-        bot=await c.bot.get_me()
-        msg=f"👥 INVITE FRIENDS (+3 pts)\n━━━━━━━━━━━━━━━━━━\nShare your invite link:\nhttps://t.me/{bot.username}?start={uid}\n\n🎁 Earn 3 reward points for each new user who joins through your referral."
-    elif action=="vip": msg="💎 VIP PRIORITY\nThe queue currently processes requests in arrival order. Administrators have unlimited wallet-free testing."
-    elif action=="promo": msg="🎟 PROMO CODE\nNo active promotional codes at present."
-    elif action=="services": msg=catalog_text(uid)
-    elif action=="help": msg=guide_text()
-    elif action=="support": msg="🛟 CUSTOMER SUPPORT\n"+("@"+SUPPORT if SUPPORT else "Contact the administrator for support and top-up instructions.")
-    else: msg="Use /start to open the main menu."
-    await q.message.reply_text(msg)
+        me=await c.bot.get_me()
+        msg=f"👥 DIGIVERIFY REFERRAL PROGRAM (+3 pts)\n━━━━━━━━━━━━━━━━━━\nInvite your friends:\nhttps://t.me/{me.username}?start={uid}\n🎁 Earn 3 points for every new user who joins via your referral."
+    elif action=="vip":msg="💎 DigiVerify uses a FIFO queue for verification requests."
+    elif action=="promo":msg="🎟 DIGIVERIFY PROMO CODES\nNo active promotional codes."
+    elif action=="services":msg=catalog_text(uid)
+    else:msg="Use /start to open the DigiVerify menu."
+    await q.message.reply_text(msg,reply_markup=menu(),disable_web_page_preview=True)
 
 def valid(url):
     try:
