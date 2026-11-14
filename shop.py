@@ -6,13 +6,16 @@ class CustomerShop:
     def __init__(self,db,balance,is_admin,admins,price,support=""):
         self.db=db;self.balance=balance;self.is_admin=is_admin;self.admins=admins
         self.price=price;self.support_default=support
-        with closing(db()) as c:
+
+    def setup(self):
+        with closing(self.db()) as c:
             c.execute("CREATE TABLE IF NOT EXISTS shop_settings(k TEXT PRIMARY KEY,v TEXT NOT NULL)")
             c.execute("CREATE TABLE IF NOT EXISTS customer_payment_intents(uid INTEGER PRIMARY KEY,cents INTEGER NOT NULL)")
             c.execute("CREATE TABLE IF NOT EXISTS customer_topups(id INTEGER PRIMARY KEY AUTOINCREMENT,uid INTEGER NOT NULL,cents INTEGER NOT NULL,txhash TEXT NOT NULL UNIQUE,status TEXT NOT NULL DEFAULT 'pending',created INTEGER NOT NULL,reviewed INTEGER)")
             c.commit()
 
     def get(self,key,default=""):
+        self.setup()
         with closing(self.db()) as c:
             r=c.execute("SELECT v FROM shop_settings WHERE k=?",(key,)).fetchone()
         return r["v"] if r else default
@@ -89,6 +92,7 @@ class CustomerShop:
     async def submit_tx(self,u,ctx,tx):
         tx=tx.strip().lower()
         if not re.fullmatch(r"0x[a-f0-9]{64}",tx):return False
+        self.setup()
         uid=u.effective_user.id
         with closing(self.db()) as c:
             row=c.execute("SELECT cents FROM customer_payment_intents WHERE uid=?",(uid,)).fetchone()
@@ -113,6 +117,7 @@ class CustomerShop:
 
     async def review(self,u,ctx,approve):
         if not self.is_admin(u.effective_user.id):return
+        self.setup()
         try:
             rid=int(ctx.args[0])
             if rid<=0:raise ValueError()
@@ -139,6 +144,7 @@ class CustomerShop:
 
     async def pending(self,u,ctx):
         if not self.is_admin(u.effective_user.id):return
+        self.setup()
         with closing(self.db()) as c:
             rows=c.execute("SELECT id,uid,cents,status FROM customer_topups ORDER BY id DESC LIMIT 15").fetchall()
         msg="\n".join(f"#{r['id']} Customer {r['uid']} · USD {r['cents']/100:.2f} · {r['status']}" for r in rows) or "No requests."
@@ -146,6 +152,7 @@ class CustomerShop:
 
     async def configure(self,u,ctx,key):
         if not self.is_admin(u.effective_user.id):return
+        self.setup()
         val=" ".join(ctx.args).strip()
         validators={
            "payment":lambda x:re.fullmatch(r"0x[a-fA-F0-9]{40}",x) is not None,
