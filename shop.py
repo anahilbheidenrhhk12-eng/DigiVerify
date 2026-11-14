@@ -21,8 +21,8 @@ class CustomerShop:
         return r["v"] if r else default
 
     def address(self): return self.get("customer_address",os.getenv("CUSTOMER_BEP20_ADDRESS","")).strip()
-    def group(self): return self.get("support_group",os.getenv("SUPPORT_GROUP_URL","")).strip()
-    def support_name(self): return self.get("support_username",self.support_default).strip().lstrip("@")
+    def group(self): return self.get("support_group",os.getenv("SUPPORT_GROUP_URL","https://t.me/digitrust22")).strip()
+    def support_name(self): return self.get("support_username",self.support_default or "DigHelptbot").strip().lstrip("@")
 
     def support_keyboard(self):
         rows=[]
