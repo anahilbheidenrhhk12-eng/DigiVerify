@@ -8,6 +8,7 @@ import io
 import logging
 import os
 import secrets
+import re
 import time
 
 from telegram import (
@@ -223,84 +224,76 @@ class ProviderMirror:
         return None
 
     async def _deliver(self, msg, edited=False):
-        if not msg or getattr(msg,"out",False):
+        """Only customer-specific verification updates leave the source account.
+
+        Source help, top-up, referral, group, wallet and payment information
+        stay private in the administrator's upstream Telegram session.
+        """
+        if not msg or getattr(msg, "out", False):
             return
         if self.observed_callback is not None:
-            try: await self.observed_callback(self,msg)
-            except Exception: LOG.exception("Cannot update upstream wallet telemetry")
+            try:
+                await self.observed_callback(self, msg)
+            except Exception:
+                LOG.exception("Cannot update upstream balance telemetry")
         uid=self.owner
-        if uid is None or time.monotonic() >= self.lease_until or time.monotonic() < self.mute_until:
+        if uid is None or self.order_owner!=uid or self.active_order is None:
+            return
+        if time.monotonic()>=self.lease_until or time.monotonic()<self.mute_until:
             return
         text=msg.raw_text or ""
-        buttons=self._markup(msg,uid)
-        if edited and (uid,msg.id) in self.sent and not msg.media:
-            try:
-                await self.app.bot.edit_message_text(
-                    chat_id=uid, message_id=self.sent[(uid,msg.id)],
-                    text=(text or " "), reply_markup=buttons,
-                    disable_web_page_preview=False
+        outcome, detail=self.classify(text)
+        if outcome is None:
+            lower=text.casefold()
+            if any(x in lower for x in ("verification request received","request queued","vip top priority","verification request queued","verification is being processed")):
+                if (uid,msg.id) in self.sent:
+                    return
+                status_msg=(
+                    "⏳ DIGIVERIFY — REQUEST QUEUED\n"
+                    "Your verification is waiting in the processing queue."
+                    if "queue" in lower or "top priority" in lower else
+                    "📨 DIGIVERIFY — VERIFICATION REQUEST RECEIVED\n"
+                    "Your request is processing. The result will be sent here."
                 )
-                return
-            except Exception:
-                LOG.warning("Could not edit previously mirrored message", exc_info=False)
-        result=None
-        try:
-            if msg.photo:
-                binary=await self.client.download_media(msg,file=bytes)
-                if binary and len(binary)<18*1024*1024:
-                    result=await self.app.bot.send_photo(
-                        chat_id=uid,photo=InputFile(io.BytesIO(binary),filename="image.jpg"),
-                        caption=text[:1024] or None,reply_markup=buttons)
-                    if len(text)>1024:
-                        await self.app.bot.send_message(chat_id=uid,text=text[1024:])
-            elif msg.document:
-                binary=await self.client.download_media(msg,file=bytes)
-                if binary and len(binary)<18*1024*1024:
-                    result=await self.app.bot.send_document(
-                        chat_id=uid, document=InputFile(io.BytesIO(binary),filename="attachment.bin"),
-                        caption=text[:1024] or None,reply_markup=buttons)
-                    if len(text)>1024:
-                        await self.app.bot.send_message(chat_id=uid,text=text[1024:])
-            if result is None:
-                display=text or ("📎 The original bot sent unsupported media." if msg.media else "Select an option:")
-                chunks=[display[i:i+3900] for i in range(0,len(display),3900)]
-                for i,chunk in enumerate(chunks):
-                    result=await self.app.bot.send_message(
-                        chat_id=uid,text=chunk,
-                        reply_markup=buttons if i==len(chunks)-1 else None,
-                        disable_web_page_preview=False)
-        except Exception:
-            LOG.exception("Could not mirror upstream response")
+                try:
+                    m=await self.app.bot.send_message(chat_id=uid,text=status_msg)
+                    self.sent[(uid,msg.id)]=m.message_id
+                except Exception:
+                    LOG.exception("Unable to deliver verification status")
+            # Never forward unrelated source help/credit/payment/group/profile messages.
             return
-        if result is not None:
-            self.sent[(uid,msg.id)]=result.message_id
-        if not self.active_order or self.order_owner!=uid:
-            return
-        outcome,detail=self.classify(text)
-        if not outcome:
-            return
-        orderid=self.active_order
-        status=self.finish(orderid,outcome,detail or "")
+
+        oid=self.active_order
+        status=self.finish(oid,outcome,detail or "")
         self.active_order=None
         self.order_owner=None
-        # The one upstream account should be available for another customer
-        # shortly after the terminal result has arrived.
-        self.lease_until = time.monotonic() + 20
-        self.needs_rotation = True
+        self.lease_until=time.monotonic()+20
+        self.needs_rotation=True
         if self.timeout_task:
             self.timeout_task.cancel()
         if self.on_terminal:
             asyncio.create_task(self.on_terminal(self,uid))
         if status=="success":
+            duration=re.search(r"Processing\s*Time\s*:\s*(\d{1,5})\s*s",text,re.IGNORECASE)
+            line=(f"\n⏱ Processing Time: {duration.group(1)}s" if duration else "")
+            cost="ADMIN TEST — FREE" if self.is_admin(uid) else f"USD {self.price_label.lstrip('$')}"
             await self.app.bot.send_message(
-                uid,"✅ DigiVerify payment confirmed: "
-                    + ("ADMIN TEST — $0.00" if self.is_admin(uid) else self.price_label)
-                    + "\n💰 The wallet was charged only after verified success."
+                chat_id=uid,
+                text=("🎉 DIGIVERIFY — VERIFICATION SUCCESSFUL! 🎉\n"
+                      "━━━━━━━━━━━━━━━━━━"+line+"\n"
+                      "🔗 Google One AI (5TB) Activation Link:\n"
+                      +str(detail)+"\n\n"
+                      "✨ Congratulations! Use the link above to activate your student discount.\n"
+                      "💎 DigiVerify Credit Used: "+cost)
             )
         elif status=="failed":
             await self.app.bot.send_message(
-                uid, "🛡 DigiVerify wallet: NO CHARGE.\n"
-                     "🔄 Refresh your SheerID verification link and try again."
+                chat_id=uid,
+                text=("❌ DIGIVERIFY — VERIFICATION COULD NOT BE COMPLETED\n"
+                      "━━━━━━━━━━━━━━━━━━\n"
+                      "🛡 ZERO DIGIVERIFY CREDITS DEDUCTED.\n"
+                      "🔄 Please refresh your SheerID link and try again.\n"
+                      "💰 Your DigiVerify wallet remains unchanged.")
             )
 
     async def _new_message(self, event):
