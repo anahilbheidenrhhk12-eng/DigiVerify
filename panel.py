@@ -119,6 +119,8 @@ class AdminPanel:
         self.server.router.add_get("/manifest.webmanifest",self.manifest)
         self.server.router.add_get("/sw.js",self.worker_script)
         self.server.router.add_get("/icon.svg",self.icon)
+        self.server.router.add_get("/icon-192.png",self.icon_png)
+        self.server.router.add_get("/icon-512.png",self.icon_png)
         self.server.router.add_get("/health",self.health)
         self.server.router.add_post("/api/login",self.login)
         self.server.router.add_get("/api/state",self.state)
@@ -169,6 +171,10 @@ class AdminPanel:
 
     async def icon(self,req):
         return web.FileResponse(BASE/"icon.svg",headers={"Content-Type":"image/svg+xml"})
+
+    async def icon_png(self,req):
+        filename="icon-192.png" if req.path.endswith("192.png") else "icon-512.png"
+        return web.FileResponse(BASE/filename,headers={"Content-Type":"image/png"})
 
     async def health(self,req):
         return web.json_response({"service":"DigiVerify Admin","status":"ok"})
@@ -435,8 +441,7 @@ class AdminPanel:
             return web.json_response({"error":"Could not connect this session. Check authorization."},status=502)
         finally:
             if client:
-                m=self._mirror(getattr(getattr(client,"_self_id",None),"id",-1)) if False else None
-                # Do not disconnect a newly registered client. Close unsuccessful ones.
+                # Close unsuccessful attempts. Never reveal the session string in logs.
                 if client not in self.app.bot_data.get("mirror_clients",[]):
                     try: await client.disconnect()
                     except Exception: pass
