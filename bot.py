@@ -256,19 +256,21 @@ def valid(url):
 async def intake(u,c):
     url=u.message.text.strip()
     if not valid(url):
-        if MIRROR is not None and not url.lower().startswith("https://services.sheerid.com/verify/"):
-            if not is_admin(u.effective_user.id) and balance(u.effective_user.id)[0] < PRICE:
-                await u.message.reply_text(f"🔒 Top up your wallet first. You need {PRICE_LABEL} to interact with the original verification service.")
-                return
-            try:
-                ok=await MIRROR.send_text(u.effective_user.id,url)
-            except Exception:
-                logging.exception("Cannot forward original bot command")
-                ok=False
-            if not ok:
-                await u.message.reply_text("⏳ Your upstream session is busy or expired. Use /start to reopen the original bot.")
-            return
-        await u.message.reply_text("Please send a valid https://services.sheerid.com/verify/... URL.")
+        if await SHOP.submit_tx(u,c,url):return
+        lower=url.casefold().strip()
+        if "top up" in lower or lower in ("topup","wallet","buy credits"):
+            return await SHOP.topup(u,c)
+        if "edu services" in lower or lower=="services":
+            await u.message.reply_text(catalog_text(u.effective_user.id),reply_markup=menu());return
+        if "history" in lower or lower=="balance":return await history(u,c)
+        if "help" in lower or "guide" in lower:
+            await u.message.reply_text(guide_text(),reply_markup=SHOP.support_keyboard());return
+        if "support group" in lower or "join group" in lower or lower=="support":
+            return await SHOP.support(u,c)
+        if "invite friends" in lower or lower=="referral":
+            me=await c.bot.get_me()
+            await u.message.reply_text(f"👥 DigiVerify referral link:\nhttps://t.me/{me.username}?start={u.effective_user.id}");return
+        await u.message.reply_text("🏠 Use the DigiVerify menu, or send a https://services.sheerid.com/verify/... link.",reply_markup=menu())
         return
     uid=u.effective_user.id
     user(uid)
@@ -299,7 +301,7 @@ async def intake(u,c):
             with closing(db()) as con:
                 con.execute("UPDATE orders SET status='processing' WHERE id=? AND status='queued'",(oid,))
                 con.commit()
-            await u.message.reply_text(f"📨 Request #{oid} sent to the ORIGINAL bot. Its actual messages and buttons will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. All original responses will be mirrored. Free admin test.")
+            await u.message.reply_text(f"📨 Request #{oid} sent to the ORIGINAL bot. Your verification result will appear here.\n🛡 DigiVerify will charge {PRICE_LABEL} only after confirmed success." if not is_admin(uid) else f"📨 Admin test #{oid} sent to ORIGINAL bot. Verification results will appear here. Free admin test.")
         else:
             await u.message.reply_text(f"⏳ Request #{oid} queued. Your position: #{MIRROR.position(uid)}. It will start automatically when a mirror becomes free. No charge while waiting.")
         return
@@ -425,6 +427,15 @@ async def cancel_command(u,c):
         await u.message.reply_text("Usage: /cancel ORDER_ID"); return
     await cancel_order(u,c,oid)
 
+async def topup_command(u,c):await SHOP.topup(u,c)
+async def support_command(u,c):await SHOP.support(u,c)
+async def setpayment(u,c):await SHOP.configure(u,c,"payment")
+async def setgroup(u,c):await SHOP.configure(u,c,"group")
+async def setsupport(u,c):await SHOP.configure(u,c,"support")
+async def topups_command(u,c):await SHOP.pending(u,c)
+async def approve_command(u,c):await SHOP.review(u,c,True)
+async def reject_command(u,c):await SHOP.review(u,c,False)
+
 async def credit(u,c):
     if not is_admin(u.effective_user.id): return
     try:
@@ -501,6 +512,8 @@ async def init(app):
             ("verify","Start a verification request"),
             ("balance","Wallet balance and top-up"),
             ("history","Your recent verifications"),
+            ("topup","Add funds to DigiVerify wallet"),
+            ("support","DigiVerify support and community"),
             ("whoami","Your Telegram numeric ID"),
             ("done","Release upstream chat for the next customer"),
             ("sessions","Admin: mirror pool and queue status"),
@@ -616,7 +629,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
+    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("topup",topup_command),("support",support_command),("setpayment",setpayment),("setgroup",setgroup),("setsupport",setsupport),("topups",topups_command),("approve",approve_command),("reject",reject_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
