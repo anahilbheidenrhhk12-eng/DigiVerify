@@ -301,6 +301,10 @@ class AdminPanel:
             asyncio.create_task(self._initial_refresh())
 
     async def stop(self):
+        for entry in list(self.phone_logins.values()):
+            try: await entry["client"].disconnect()
+            except Exception: pass
+        self.phone_logins.clear()
         if self.task:
             self.task.cancel()
             try: await self.task
@@ -364,6 +368,12 @@ class AdminPanel:
     async def _health_loop(self):
         while True:
             await asyncio.sleep(30)
+            now=time.monotonic()
+            for ticket,entry in list(self.phone_logins.items()):
+                if entry["expires"]<=now:
+                    self.phone_logins.pop(ticket,None)
+                    try: await entry["client"].disconnect()
+                    except Exception: pass
             pool=self._pool()
             if not pool: continue
             for m in list(pool.mirrors):
