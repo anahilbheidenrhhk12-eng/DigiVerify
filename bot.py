@@ -139,6 +139,9 @@ async def start(u,c):
     uid=u.effective_user.id
     ref=int(c.args[0]) if c.args and c.args[0].isdigit() else None
     user(uid,ref)
+    if MIRROR is not None and not is_admin(uid) and balance(uid)[0]<PRICE:
+        await u.effective_message.reply_text(f"🔒 DigiVerify wallet top-up required. Please add at least {PRICE_LABEL} before accessing the original verification bot. Open Wallet / Top Up.",reply_markup=menu())
+        return
     if MIRROR is not None:
         if not await MIRROR.open(uid):
             await u.effective_message.reply_text(f"⏳ All mirrors are busy. You are in the waiting queue at position #{MIRROR.position(uid)}. We will notify you automatically when your turn arrives.")
