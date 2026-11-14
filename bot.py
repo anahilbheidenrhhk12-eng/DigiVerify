@@ -8,6 +8,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from mirror import ProviderMirror
 from pool import MirrorPool
+from panel import AdminPanel, ensure_panel_tables, load_saved_sessions, is_disabled
 
 logging.basicConfig(level=logging.WARNING)
 TOKEN=os.getenv("BOT_TOKEN","")
@@ -19,6 +20,7 @@ PROVIDER=os.getenv("PROVIDER_USERNAME","gemini_ver_bot").lstrip("@")
 SUPPORT=os.getenv("SUPPORT_USERNAME","").lstrip("@")
 CLIENT=None
 MIRROR=None
+PANEL_DISABLED_ENV={}
 Q=asyncio.Queue()
 CANCEL_REQUESTS=set()
 LOCK=asyncio.Lock()
@@ -468,6 +470,16 @@ async def verify_command(u,c):
     user(u.effective_user.id)
     await u.effective_message.reply_text(verify_text(u.effective_user.id))
 
+async def panel_command(u,c):
+    if not is_admin(u.effective_user.id): return
+    panel=c.application.bot_data.get('panel')
+    if not panel:
+        await u.effective_message.reply_text('⚠️ Admin panel unavailable. Check Railway deployment logs.')
+        return
+    code=panel.issue_code(u.effective_user.id)
+    url=os.getenv('PANEL_URL','').strip() or 'Open the DigiVerify Railway public HTTPS domain'
+    await u.effective_message.reply_text('📱 DigiVerify Control — Private Admin Login\n\n🔗 '+url+'\n\n🔐 One-time login code (10 minutes):\n'+code+'\n\nOpen the URL and enter this code. Do not share it.')
+
 async def sessions_command(u,c):
     if not is_admin(u.effective_user.id): return
     await u.effective_message.reply_text(MIRROR.status() if MIRROR else "No mirrors connected.")
@@ -505,6 +517,7 @@ async def init(app):
             ("whoami","Your Telegram numeric ID"),
             ("done","Release upstream chat for the next customer"),
             ("sessions","Admin: mirror pool and queue status"),
+            ("panel","Admin: mobile control app login"),
             ("cancel","Admin: cancel a queued order"),
             ("addadmin","Admin: grant admin access"),
             ("admins","Admin: list administrators"),
@@ -512,42 +525,61 @@ async def init(app):
     except Exception:
         logging.exception("Unable to update Telegram bot profile")
 
+    global PANEL_DISABLED_ENV
+    ensure_panel_tables(db)
     api=os.getenv("TG_API_ID","")
-    hash=os.getenv("TG_API_HASH","")
+    api_hash=os.getenv("TG_API_HASH","")
     raw=os.getenv("TG_SESSION_STRINGS","")
     try:
-        sessions=json.loads(raw) if raw.strip().startswith("[") else [x.strip() for x in raw.splitlines() if x.strip()]
+        raw_env=json.loads(raw) if raw.strip().startswith("[") else [x.strip() for x in raw.splitlines() if x.strip()]
     except ValueError:
         logging.error("TG_SESSION_STRINGS must be a JSON array or newline-separated session strings")
-        sessions=[]
+        raw_env=[]
     original=os.getenv("TG_SESSION_STRING","").strip()
-    if original and original not in sessions: sessions.insert(0,original)
+    if original and original not in raw_env: raw_env.insert(0,original)
+    session_sources=[(sess,"env",f"Mirror {i+1}") for i,sess in enumerate(raw_env)]
+    session_sources.extend((sess,"panel",label) for sess,label,aid in load_saved_sessions(db))
     clients=[]
     mirrors=[]
     seen_accounts=set()
-    if sessions and api.isdigit() and hash:
-        for i,session in enumerate(sessions):
+    PANEL_DISABLED_ENV={}
+    if session_sources and api.isdigit() and api_hash:
+        for i,(session,source,label) in enumerate(session_sources):
+            client=None
             try:
-                client=TelegramClient(StringSession(session),int(api),hash)
+                client=TelegramClient(StringSession(session),int(api),api_hash)
                 await client.connect()
                 if not await client.is_user_authorized():
                     await client.disconnect()
                     logging.error("Mirror session %s is not authorized",i+1)
                     continue
                 account=await client.get_me()
-                if account.id in seen_accounts:
+                aid=int(account.id)
+                if aid in seen_accounts:
                     logging.warning("Duplicate Telegram account in mirror session %s ignored",i+1)
                     await client.disconnect()
                     continue
-                seen_accounts.add(account.id)
+                seen_accounts.add(aid)
+                if is_disabled(db,aid):
+                    if source=="env": PANEL_DISABLED_ENV[aid]=session
+                    await client.disconnect()
+                    logging.warning("Mirror account %s disabled from mobile panel",aid)
+                    continue
                 mirror=ProviderMirror(client,PROVIDER,app,finish,classify,is_admin,PRICE_LABEL,
                     session_ttl=int(os.getenv("MIRROR_SESSION_TTL","300")),
                     result_timeout=int(os.getenv("PROVIDER_TIMEOUT_SECONDS","360")))
+                mirror.account_id=aid
+                mirror.phone_masked=("••••"+str(account.phone)[-4:]) if getattr(account,"phone",None) else None
+                mirror.label=label
+                mirror.source=source
                 await mirror.start()
                 clients.append(client)
                 mirrors.append(mirror)
             except Exception:
                 logging.exception("Unable to connect mirror session %s",i+1)
+                if client:
+                    try: await client.disconnect()
+                    except Exception: pass
     if mirrors:
         def order_open(oid):
             with closing(db()) as con:
@@ -569,8 +601,17 @@ async def init(app):
     if MIRROR is None:
         logging.warning("Mirror not available. Falling back to legacy upstream request workflow.")
         app.bot_data["worker"]=asyncio.create_task(worker(app))
+    panel=AdminPanel(app,__import__(__name__))
+    panel.disabled_env=PANEL_DISABLED_ENV
+    app.bot_data["panel"]=panel
+    try:
+        await panel.start()
+    except Exception:
+        logging.exception("Admin mobile panel could not start")
 
 async def shutdown(app):
+    panel=app.bot_data.get("panel")
+    if panel: await panel.stop()
     task=app.bot_data.get("worker")
     if task:
         task.cancel()
@@ -590,7 +631,7 @@ def main():
     if not TOKEN: raise RuntimeError("BOT_TOKEN missing")
     db().close()
     app=Application.builder().token(TOKEN).post_init(init).post_shutdown(shutdown).build()
-    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("whoami",whoami)]:
+    for command,handler in [("start",start),("balance",wallet),("history",history),("services",services_command),("guide",guide_command),("verify",verify_command),("credit",credit),("orders",orders),("cancel",cancel_command),("addadmin",addadmin),("admins",admins_command),("done",release_command),("sessions",sessions_command),("panel",panel_command),("whoami",whoami)]:
         app.add_handler(CommandHandler(command,handler))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,intake))
