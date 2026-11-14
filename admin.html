@@ -109,7 +109,7 @@ async function fetchState(){
  if(document.activeElement&&["INPUT","TEXTAREA"].includes(document.activeElement.tagName))return;
  render();alertIfNeeded();
 }
-function pill(status){var cls=status==="online"?"good":status==="processing"||status==="in-use"?"warning":"bad";
+function pill(status){var cls=status==="online"||status==="approved"?"good":status==="processing"||status==="in-use"||status==="pending"?"warning":"bad";
  var title=({online:"متصل",processing:"يعالج طلب", "in-use":"مستخدم",offline:"غير متصل",disabled:"معطّل"})[status]||status;
  return '<span class="chip '+cls+'">'+safe(title)+'</span>'}
 function headline(t,desc){return '<div class="row" style="border:0"><h2>'+t+'</h2><span class="meta">'+(desc||"")+'</span></div>'}
@@ -164,11 +164,16 @@ function queue(){
  html+=(S.orders.length?"":"<p class='note'>لا توجد طلبات.</p>")+'</div>';return html;
 }
 function finance(){
- var html=headline("💰 شحن وإدارة الأرصدة","");
- html+='<div class="card"><h3>➕ شحن محفظة عميل DigiVerify</h3><p class="note">يضيف رصيداً للعميل داخل DigiVerify فقط.</p><form id="wallet-form"><label>Telegram User ID</label><input type="number" min="1" name="uid" placeholder="123456789" required><label>USD</label><input type="number" min="0.01" step="0.01" name="amount" required placeholder="10.00"><button type="submit" class="btn primary">تأكيد شحن العميل</button></form></div>';
- html+='<div class="card"><h3>🧾 سجلات الشحن لدى المزود</h3>';
- S.sessions.forEach(function(s){html+='<div class="row"><b>'+safe(s.label)+'</b><span>USD '+money(s.topup_recorded_cents)+'</span></div>'});
- html+='<div class="notice">تسجيل شحن للحساب الأصلي يسجّل الدفع فقط، ولا يضيف أموالاً داخل البوت الأصلي. يجب تأكيد عملية الشحن من المزود أولاً.</div></div>';return html;
+ var ps=S.payment_stats||{},paid=ps.approved||{},pending=ps.pending||{},rejected=ps.rejected||{};
+ var html=headline("💰 الشحن والمحاسبة","بيانات DigiVerify الفعلية");
+ html+='<div class="finance-summary">'+stat("✅ مدفوعات مؤكدة","$"+money(paid.cents||0),(paid.count||0)+" عملية")+stat("⏳ قيد المراجعة","$"+money(pending.cents||0),(pending.count||0)+" عملية")+stat("❌ مرفوضة",rejected.count||0,"لم تضاف للمحفظة")+stat("💎 شحن المزود المسجل","$"+money(S.sessions.reduce(function(a,s){return a+(s.topup_recorded_cents||0)},0)),"تسجيل يدوي فقط")+'</div>';
+ html+='<div class="card"><h3>➕ شحن محفظة عميل DigiVerify</h3><p class="note">يضاف الرصيد داخل بوت DigiVerify فقط بعد تأكيد المسؤول. لا يؤثر على أرصدة السشنات الأصلية.</p><form id="wallet-form"><label>Telegram User ID</label><input type="number" min="1" name="uid" placeholder="123456789" required><label>USD</label><input type="number" min="0.01" step="0.01" name="amount" required placeholder="10.00"><button type="submit" class="btn primary">تأكيد شحن العميل</button></form></div>';
+ html+='<div class="card"><h3>🧾 آخر مدفوعات العملاء</h3>';
+ (S.recent_payments||[]).forEach(function(p){html+='<div class="row"><div><b>#'+p.id+' · '+p.uid+'</b><div class="meta">'+safe(date(p.created))+'</div></div><div style="text-align:left"><b>$'+money(p.cents)+'</b><div>'+pill(p.status)+'</div></div></div>'});
+ if(!(S.recent_payments||[]).length)html+='<p class="note">لا توجد مدفوعات مسجلة.</p>';
+ html+='</div><div class="card"><h3>🪞 أرصدة حسابات المزود</h3>';
+ S.sessions.forEach(function(s){html+='<div class="row"><div><b>'+safe(s.label)+'</b><div class="meta">💎 '+(s.vip===null?"—":s.vip)+' · 🎁 '+(s.free===null?"—":s.free)+' · ✨ '+(s.points===null?"—":s.points)+'</div></div><button class="btn primary" data-action="claim" data-id="'+s.id+'">💳 شحن</button></div>'});
+ html+='<div class="notice">المدفوعات المؤكدة تخص العملاء. أرصدة VIP وFree مصدرها رسائل المزود. سجلات الشحن اليدوية ليست إثباتًا لوصول الأموال.</div></div>';return html;
 }
 function settings(){
  return headline("⚙️ الإعدادات","")+'<div class="card"><h3>📱 تثبيت التطبيق على الهاتف</h3><p class="note">Android: افتح هذه الصفحة في Chrome ثم اختر Install App أو Add to Home Screen. iPhone: افتحها في Safari ثم مشاركة → Add to Home Screen.</p><button class="btn primary" data-action="install">⬇️ تثبيت DigiVerify Control</button></div><div class="card"><h3>🔔 التنبيهات</h3><p class="note">تنبيهات قلة الرصيد وانقطاع الاتصال تصل إلى الأدمن عبر Telegram حتى عندما يكون تطبيق الهاتف مغلقًا.</p><button class="btn" data-action="notification">تفعيل إشعارات المتصفح</button></div><div class="card"><h3>🔐 إدارة الدخول</h3><p class="note">دخول الأدمن باستخدام رمز مؤقت يصدر من /panel. جلسات الحسابات محفوظة مشفرة ولا تظهر في التقرير. يبقى هذا الهاتف مسجّل الدخول لمدة تصل إلى سنة، حتى بعد إعادة تشغيل الخادم. يمكنك إلغاء الدخول في أي وقت.</p><button class="btn danger" data-action="logout">تسجيل الخروج</button></div>';
